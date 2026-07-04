@@ -3206,6 +3206,12 @@
 		(uuid "13be38ad-c388-46df-9491-dd5d65f9ca88")
 	)
 	(junction
+		(at 60.96 130.81)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "2e3f9a34-fe3f-4652-a18d-251e5780ed38")
+	)
+	(junction
 		(at 158.75 166.37)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3258,6 +3264,12 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "fb95c318-fc91-4956-9267-a8f57c958259")
+	)
+	(junction
+		(at 60.96 81.28)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "fc6c389e-1c7d-4013-b43f-7f0eb0b8f092")
 	)
 	(no_connect
 		(at 130.81 58.42)
@@ -3436,6 +3448,16 @@
 			(type default)
 		)
 		(uuid "331d97f6-b6ea-49f1-b9e8-39cd84f59447")
+	)
+	(wire
+		(pts
+			(xy 55.88 130.81) (xy 60.96 130.81)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "33dfb048-faa9-4cfd-a81f-2e8d58c3dd51")
 	)
 	(wire
 		(pts
@@ -3776,6 +3798,16 @@
 			(type default)
 		)
 		(uuid "c010f0a1-750f-4f7b-ba26-5bc598e77290")
+	)
+	(wire
+		(pts
+			(xy 55.88 81.28) (xy 60.96 81.28)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "c7c75d21-a60f-4d4c-8b0c-77bc9532bf82")
 	)
 	(polyline
 		(pts
@@ -4311,6 +4343,15 @@
 				(hide yes)
 			)
 		)
+		(property "MPN" ""
+			(at 156.21 130.81 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "477d0c63-ea82-4fc4-abae-f2eaad92d351")
 		)
@@ -4504,6 +4545,15 @@
 			)
 		)
 		(property "Description" "Generic connector, single row, 01x04, script generated (kicad-library-utils/schlib/autogen/connector/)"
+			(at 48.26 63.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" ""
 			(at 48.26 63.5 0)
 			(effects
 				(font
@@ -4782,6 +4832,15 @@
 				(hide yes)
 			)
 		)
+		(property "MPN" ""
+			(at 160.02 105.41 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "f68491c8-66f7-4277-b7e5-41548c2dcca4")
 		)
@@ -4845,6 +4904,15 @@
 			)
 		)
 		(property "Description" "Pololu Breakout Board, Stepper Driver A4988"
+			(at 66.04 113.03 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" ""
 			(at 66.04 113.03 0)
 			(effects
 				(font
@@ -5161,6 +5229,15 @@
 				(hide yes)
 			)
 		)
+		(property "MPN" ""
+			(at 120.65 163.83 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "5"
 			(uuid "e88a8644-4b02-4189-9f68-b7ed007a70a3")
 		)
@@ -5372,6 +5449,15 @@
 				(hide yes)
 			)
 		)
+		(property "MPN" ""
+			(at 125.73 95.25 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "ab4ced6b-8714-4f66-afe7-4fb7a1a93a48")
 		)
@@ -5434,6 +5520,15 @@
 			)
 		)
 		(property "Description" "Generic connector, single row, 01x06, script generated (kicad-library-utils/schlib/autogen/connector/)"
+			(at 69.85 163.83 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" ""
 			(at 69.85 163.83 0)
 			(effects
 				(font
@@ -5589,6 +5684,15 @@
 				(hide yes)
 			)
 		)
+		(property "MPN" ""
+			(at 156.21 157.48 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "3"
 			(uuid "2ae822b0-adc2-46ea-a780-238e0c993f90")
 		)
@@ -5668,6 +5772,15 @@
 			)
 		)
 		(property "Description" "Ultra wide band RF module With ranging location capabilities"
+			(at 153.67 71.12 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" "DWM3000.E1.1SR"
 			(at 153.67 71.12 0)
 			(effects
 				(font
@@ -5905,7 +6018,7 @@
 				)
 			)
 		)
-		(property "Value" "100nF"
+		(property "Value" "0.1uF"
 			(at 164.084 101.346 90)
 			(effects
 				(font
@@ -5933,6 +6046,15 @@
 		)
 		(property "Description" "Unpolarized capacitor"
 			(at 160.02 99.06 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" ""
+			(at 160.02 99.06 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -6016,6 +6138,82 @@
 			(project "Robot"
 				(path "/92103f34-d901-41db-8b68-bc19c38fc803"
 					(reference "#PWR026")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 52.07 130.81 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "718bdd5f-0228-417c-94ec-0485d69f7062")
+		(property "Reference" "C4"
+			(at 52.07 127.254 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "0.1uF"
+			(at 52.324 134.366 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 48.26 131.7752 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 52.07 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 52.07 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" ""
+			(at 52.07 130.81 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "6be0b34b-6557-4c90-a100-ae9e7af31023")
+		)
+		(pin "1"
+			(uuid "ba8dd7b9-d612-4dbf-bdaf-961427a1d672")
+		)
+		(instances
+			(project "Robot"
+				(path "/92103f34-d901-41db-8b68-bc19c38fc803"
+					(reference "C4")
 					(unit 1)
 				)
 			)
@@ -6206,6 +6404,15 @@
 				(hide yes)
 			)
 		)
+		(property "MPN" ""
+			(at 149.86 137.16 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "571423db-78dc-49c1-992b-e5d0ee36cb41")
 		)
@@ -6334,6 +6541,15 @@
 			)
 		)
 		(property "Description" ""
+			(at 106.68 59.69 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" ""
 			(at 106.68 59.69 0)
 			(effects
 				(font
@@ -6475,6 +6691,15 @@
 				(hide yes)
 			)
 		)
+		(property "MPN" ""
+			(at 66.04 63.5 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "16"
 			(uuid "c0499607-b3d2-4071-9c9d-9a77860ea2cd")
 		)
@@ -6527,6 +6752,72 @@
 			(project ""
 				(path "/92103f34-d901-41db-8b68-bc19c38fc803"
 					(reference "A1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 48.26 81.28 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "9a272479-8223-4617-949c-7870fd790ef3")
+		(property "Reference" "#PWR01"
+			(at 41.91 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 48.006 78.74 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 48.26 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 48.26 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 48.26 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "aaa5c6f8-2da2-4562-a314-7ff1e27d6513")
+		)
+		(instances
+			(project ""
+				(path "/92103f34-d901-41db-8b68-bc19c38fc803"
+					(reference "#PWR01")
 					(unit 1)
 				)
 			)
@@ -6592,6 +6883,72 @@
 			(project ""
 				(path "/92103f34-d901-41db-8b68-bc19c38fc803"
 					(reference "#PWR015")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 48.26 130.81 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "a26aed5c-1e00-42d1-928f-40b3444801f0")
+		(property "Reference" "#PWR031"
+			(at 41.91 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Value" "GND"
+			(at 48.006 128.27 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+		(property "Footprint" ""
+			(at 48.26 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" ""
+			(at 48.26 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 48.26 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "1"
+			(uuid "a8021c85-d762-42d5-ba40-5a13ab8d83db")
+		)
+		(instances
+			(project "Robot"
+				(path "/92103f34-d901-41db-8b68-bc19c38fc803"
+					(reference "#PWR031")
 					(unit 1)
 				)
 			)
@@ -6722,6 +7079,82 @@
 			(project "Robot"
 				(path "/92103f34-d901-41db-8b68-bc19c38fc803"
 					(reference "#PWR014")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:C")
+		(at 52.07 81.28 270)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "b6834aba-bbfa-4e19-925c-a58b361f9f17")
+		(property "Reference" "C3"
+			(at 52.07 77.724 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "0.1uF"
+			(at 52.324 84.836 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
+			(at 48.26 82.2452 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 52.07 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "Unpolarized capacitor"
+			(at 52.07 81.28 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" ""
+			(at 52.07 81.28 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "2"
+			(uuid "c81c0470-019c-45e3-b396-74ca7612e4a7")
+		)
+		(pin "1"
+			(uuid "efee5d95-f1f4-45f3-92d7-44cb9350fc37")
+		)
+		(instances
+			(project "Robot"
+				(path "/92103f34-d901-41db-8b68-bc19c38fc803"
+					(reference "C3")
 					(unit 1)
 				)
 			)
@@ -6970,6 +7403,15 @@
 			)
 		)
 		(property "Description" "Generic connector, single row, 01x06, script generated (kicad-library-utils/schlib/autogen/connector/)"
+			(at 95.25 163.83 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" ""
 			(at 95.25 163.83 0)
 			(effects
 				(font
@@ -7315,6 +7757,15 @@
 			)
 		)
 		(property "Description" "Generic connector, single row, 01x04, script generated (kicad-library-utils/schlib/autogen/connector/)"
+			(at 48.26 113.03 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "MPN" ""
 			(at 48.26 113.03 0)
 			(effects
 				(font

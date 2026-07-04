@@ -1,46 +1,7 @@
 #include <Arduino.h>
 #include <SPI.h>
-#include <Wire.h> // I2C
 
 #include "dw3000.h"
-#include "Adafruit_VL53L0X.h"
-#include "stepper.h"
-
-// stepper definitions
-#define LEFT_STEPPER_FORWARD   1
-#define LEFT_STEPPER_BACKWARD  0
-#define RIGHT_STEPPER_FORWARD  0
-#define RIGHT_STEPPER_BACKWARD 1
-
-#define TURNING_RADIUS 50
-
-// left stepper
-#define DIR1  29
-#define STEP1 28
-#define EN1   13
-
-// right stepper
-#define DIR2  27
-#define STEP2 26
-#define EN2   12
-
-// tof definitions
-#define TOF1_XSHUT 11 // front
-#define TOF2_XSHUT 10 // right
-#define TOF3_XSHUT 9  // left
-
-#define TOF1_OFFSET 0 //20
-#define TOF2_OFFSET 29
-#define TOF3_OFFSET 52
-
-#define OUT_OF_RANGE -20.0f
-
-// i2c definitions
-#define SCL 15
-#define SDA 14
-#define TOF1_ADDR    0x30
-#define TOF2_ADDR    0x31
-#define TOF3_ADDR    0x32
 
 // dwm3000 definitions
 #define PIN_IRQ  6
@@ -49,8 +10,8 @@
 
 #define DWM_ID 0xDECA0302
 
-#define RECEIVER_ADDRESS    0x10000000
-#define TRANSMITTER_ADDRESS 0x00000002
+#define RECEIVER_ADDRESS    0x00000001
+#define TRANSMITTER_ADDRESS 0x20000000
 
 // spi definitions
 #define SCK  2
@@ -62,14 +23,20 @@
 
 #define READ_DUMMY 0x00
 
+// joystick definitions
+#define JOY_Y  29
+#define JOY_X  28
+#define JOY_SW 27 // give this an internal pull-up resistor
+
+// auto mode toggle
+#define AUTO 13 // give this an internal pull-down resistor
+
 void printDWMDiagnostics();
 void resetDWM();
 
 void checkData();
 void calculateDistance();
 void respond(uint32_t dest_address);
-float tofSensorDistance(uint8_t address);
-void calibrateTof();
 
 volatile bool uwb_irq = false;
 uint16_t rx_len = 0;   
@@ -80,18 +47,6 @@ uint64_t t1; // timestamp when transmitter sent frame
 uint64_t t2; // timestamp when receiver received frame
 uint64_t t3; // timestamp when receiver sent response
 uint64_t t4; // timestamp when transmitter recieved response
-
-Adafruit_VL53L0X tof1 = Adafruit_VL53L0X();
-Adafruit_VL53L0X tof2 = Adafruit_VL53L0X();
-Adafruit_VL53L0X tof3 = Adafruit_VL53L0X();
-
-int leftPins[3] = {STEP1, DIR1, EN1};
-int rightPins[3] = {STEP2, DIR2, EN2};
-stepper leftStepper(leftPins);
-stepper rightStepper(rightPins);
-
-bool forward = false;
-int turn_attempts = 0;
 
 void dwm3000_isr() {
   uwb_irq = true;
@@ -119,44 +74,13 @@ void setup() {
   uint32_t t = millis();
   while (!Serial && (millis() - t < 3000)); // wait for serial to connect, but if it takes more than 3s continue anyways
 
-  pinMode(TOF1_XSHUT, OUTPUT);
-  pinMode(TOF2_XSHUT, OUTPUT);
-  pinMode(TOF3_XSHUT, OUTPUT);
+  pinMode(JOY_X, INPUT);
+  pinMode(JOY_Y, INPUT);
+  pinMode(JOY_SW, INPUT_PULLUP);
 
-  // assign addresses to TOF Sensors
-  digitalWrite(TOF1_XSHUT, 0);
-  digitalWrite(TOF2_XSHUT, 0);
-  digitalWrite(TOF3_XSHUT, 0);
-  delay(10);
-
-  Wire1.setSDA(SDA); 
-  Wire1.setSCL(SCL);
-  Wire1.begin();
-
-  digitalWrite(TOF1_XSHUT, 1);
-  delay(10);
-  if (!tof1.begin(TOF1_ADDR, false, &Wire1)) {
-    Serial.println(F("Failed to boot Sensor 1"));
-  }
-  tof1.setMeasurementTimingBudgetMicroSeconds(33000);
-
-  digitalWrite(TOF2_XSHUT, 1);
-  delay(10);
-  if (!tof2.begin(TOF2_ADDR, false, &Wire1)) {
-    Serial.println(F("Failed to boot Sensor 2"));
-  }
-  tof2.setMeasurementTimingBudgetMicroSeconds(33000);
-
-  digitalWrite(TOF3_XSHUT, 1);
-  delay(10);
-  if (!tof3.begin(TOF3_ADDR, false, &Wire1)) {
-    Serial.println(F("Failed to boot Sensor 3"));
-  }
-  tof3.setMeasurementTimingBudgetMicroSeconds(33000);
-
-  Serial.println(F("Booted sensors ready!"));
+  pinMode(AUTO, INPUT_PULLDOWN);
   
-  // spi initialization
+  /*// spi initialization
   SPI.setSCK(SCK); 
   SPI.setTX(MOSI);
   SPI.setRX(MISO);
@@ -217,11 +141,13 @@ void setup() {
 
   dwt_rxenable(DWT_START_RX_IMMEDIATE);
 
-  printDWMDiagnostics();
+  printDWMDiagnostics();*/
 }
 
 void loop () {
-  // poll for interrupts
+  if (digitalRead(AUTO)) Serial.println("AUTO Mode");
+
+  /*// poll for interrupts
   if (uwb_irq) {
     Serial.println("Checking Data");
     checkData();
@@ -234,48 +160,6 @@ void loop () {
       
       // ensure dwm is still active
       dwt_rxenable(DWT_START_RX_IMMEDIATE);
-  }
-
-  /*leftStepper.stepperLoop();
-  rightStepper.stepperLoop();
-
-  if (forward) {
-    // check that neither motor is busy
-    if (!leftStepper.isBusy() && !rightStepper.isBusy()) {
-      leftStepper.moveStepper(LEFT_STEPPER_FORWARD, 200);
-      rightStepper.moveStepper(RIGHT_STEPPER_FORWARD, 200);
-
-      turn_attempts = 0;
-    }
-
-    forward = false;
-  } else {
-    // check that neither motor is busy
-    if (!leftStepper.isBusy() && !rightStepper.isBusy()) {
-      // if turn_attempts is relatively high, we are probably stuck so we should try going forwards
-      if (turn_attempts < 4) {
-        // check if we need to turn
-        float left_dist = tofSensorDistance(TOF3_ADDR);
-        float right_dist = tofSensorDistance(TOF2_ADDR);
-
-        // turning left
-        if (right_dist == OUT_OF_RANGE || (left_dist - right_dist > 50)) {
-          leftStepper.moveStepper(LEFT_STEPPER_BACKWARD, TURNING_RADIUS);
-          rightStepper.moveStepper(RIGHT_STEPPER_FORWARD, TURNING_RADIUS);
-        }
-
-        // turning right
-        if (left_dist == OUT_OF_RANGE || (left_dist - right_dist < -50)) {
-          leftStepper.moveStepper(LEFT_STEPPER_FORWARD, TURNING_RADIUS);
-          rightStepper.moveStepper(RIGHT_STEPPER_BACKWARD, TURNING_RADIUS);
-        }
-
-        turn_attempts ++;
-      }
-
-      // after turning continue going straight
-      forward = true;
-    }
   }*/
 }
 
@@ -398,56 +282,6 @@ void calculateDistance() {
   distance -= 51.1; // this is supposed to account for the travel time through the pcb traces. change this as necessary if there is a constant offset noticed
 
   Serial.println("Distance: " + String(distance));
-}
-
-float tofSensorDistance(uint8_t address) {
-  VL53L0X_RangingMeasurementData_t measure;
-  uint16_t offset = 0;
-  bool applyAngleCorrection = false;
-
-  switch (address) {
-    case TOF1_ADDR:
-      tof1.rangingTest(&measure, false);
-      offset = TOF1_OFFSET;
-      break;
-    case TOF2_ADDR:
-      tof2.rangingTest(&measure, false);
-      offset = TOF2_OFFSET;
-      applyAngleCorrection = true;
-      break;
-    case TOF3_ADDR:
-      tof3.rangingTest(&measure, false);
-      offset = TOF3_OFFSET;
-      applyAngleCorrection = true;
-      break;
-    default: break;
-  }
-
-  // if it's out of range sometimes it gives the status, other times it measures 8191 but this is consistant behaviour
-  if (measure.RangeStatus != 4 && measure.RangeMilliMeter != 8191) { // 4 means distance is out of range
-    int16_t final_calculated_dist = (int16_t) (measure.RangeMilliMeter - offset);
-
-    if (applyAngleCorrection) {
-      final_calculated_dist *= 0.9548f; // cos(17.3 deg)
-    }
-
-    Serial.printf("Distance: %d mm\n", final_calculated_dist);
-    return final_calculated_dist;
-  } else {
-    Serial.print("Out of range\n");
-    return OUT_OF_RANGE;
-  }
-}
-
-// to use, place object 100mm away from and perpendicular to the sensor
-void calibrateTof() {
-  float sum = 0.0f;
-  for (int i = 0; i < 10; i++) {
-    sum += tofSensorDistance(TOF2_ADDR);
-  }
-
-  Serial.printf("AVG: %.2f\n", sum/10.0f);
-  delay(500);
 }
 
 void resetDWM() {

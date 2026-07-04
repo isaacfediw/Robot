@@ -5,4 +5,5 @@
   (lib (name "tp4056")(type "KiCad")(uri "${KIPRJMOD}/Robot.pretty/tp4056.kicad_sym")(options "")(descr ""))
   (lib (name "xl6009_module")(type "KiCad")(uri "${KIPRJMOD}/Robot.pretty/xl6009_module.kicad_sym")(options "")(descr ""))
   (lib (name "mp1584en")(type "KiCad")(uri "${KIPRJMOD}/Robot.pretty/mp1584en.kicad_sym")(options "")(descr ""))
+  (lib (name "THB001P")(type "KiCad")(uri "C:/Users/isaac/Documents/Projects/Robot/Transmitter Schematic/Transmitter.pretty/THB001P.kicad_sym")(options "")(descr ""))
 )
