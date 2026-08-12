@@ -11,7 +11,7 @@
 #define DWM_ID 0xDECA0302
 
 #define RECEIVER_ADDRESS    0x00000001
-#define TRANSMITTER_ADDRESS 0x20000000
+#define TRANSMITTER_ADDRESS 0x00000002
 
 // spi definitions
 #define SCK  2
@@ -33,20 +33,22 @@
 
 void printDWMDiagnostics();
 void resetDWM();
-
+void send(uint32_t dest_address, uint8_t data[], int data_size);
+void initiate(uint8_t command);
 void checkData();
-void calculateDistance();
 void respond(uint32_t dest_address);
 
+int max_distance;
+
+bool initiated = false;
 volatile bool uwb_irq = false;
 uint16_t rx_len = 0;   
 uint32_t rx_finfo;
 uint8_t rx_data[64];
 
 uint64_t t1; // timestamp when transmitter sent frame
-uint64_t t2; // timestamp when receiver received frame
-uint64_t t3; // timestamp when receiver sent response
 uint64_t t4; // timestamp when transmitter recieved response
+uint64_t t5; // timestamp when transmitted sends second frame
 
 void dwm3000_isr() {
   uwb_irq = true;
@@ -80,7 +82,7 @@ void setup() {
 
   pinMode(AUTO, INPUT_PULLDOWN);
   
-  /*// spi initialization
+  // spi initialization
   SPI.setSCK(SCK); 
   SPI.setTX(MOSI);
   SPI.setRX(MISO);
@@ -136,24 +138,42 @@ void setup() {
   }
   // End DWM3000 Initialization
 
+  // setup interrupts
+  dwt_setinterrupt(DWT_INT_RX | DWT_INT_TFRS, 0, DWT_ENABLE_INT_ONLY);
   // note that the pin_irq is already set up as an input in spiBegin()
   attachInterrupt(digitalPinToInterrupt(PIN_IRQ), dwm3000_isr, RISING);
 
   dwt_rxenable(DWT_START_RX_IMMEDIATE);
 
-  printDWMDiagnostics();*/
+  printDWMDiagnostics();
 }
 
-void loop () {
-  if (digitalRead(AUTO)) Serial.println("AUTO Mode");
+//uint32_t last_tx_time = 0;
 
-  /*// poll for interrupts
+void loop() {
+  if (!digitalRead(AUTO) && initiated) {
+    Serial.println("Sending 0x2D");
+    initiate(0x2D);
+    initiated = false;
+  } else if (digitalRead(AUTO) && !initiated) {
+    Serial.println("Sending Auto Mode");
+    max_distance = 0;
+    initiate(0xAA); 
+    //last_tx_time = millis();
+  }
+
+  // if (initiated && (millis() - last_tx_time > 150)) {xx
+  //   // timed out
+  //   initiated = false;
+  // }
+
+  // poll for interrupts
   if (uwb_irq) {
-    Serial.println("Checking Data");
+    //last_tx_time = millis();
     checkData();
   }
 
-  static uint32_t last_check = 0;
+  /*static uint32_t last_check = 0;
   if (millis() - last_check > 5000) {
       printDWMDiagnostics();
       last_check = millis();
@@ -164,124 +184,145 @@ void loop () {
 }
 
 void checkData() {
-  if (!uwb_irq) return;
   uwb_irq = false;
 
+  delayMicroseconds(10);
   uint32_t status = dwt_read32bitreg(SYS_STATUS_ID);
 
   if (status & SYS_STATUS_RXFCG_BIT_MASK) {
     rx_finfo = dwt_read32bitreg(RX_FINFO_ID);
     rx_len = (uint16_t) (rx_finfo & RX_FINFO_RXFLEN_BIT_MASK); // frame length is stored within the least significant 10 bits
-
     rx_len -=2; // removes the CRC bytes from the length
 
     if (rx_len > 64) {
       Serial.printf("[ERROR] rx length of %d is too long (max 64)\n", rx_len);
-      dwt_rxenable(DWT_START_RX_IMMEDIATE);
-      return;
-    }
+    } else if (rx_len < 5) { // must be at least 5 if it sent the 4 byte address and a message
+      Serial.printf("[ERROR] rx length of %d is too short (min 5)\n", rx_len);
+    } else {
+      dwt_readrxdata(rx_data, rx_len, 0);
 
-    if (rx_len < 4) {
-      Serial.printf("[ERROR] rx length of %d is too short (min 4)\n", rx_len);
-      dwt_rxenable(DWT_START_RX_IMMEDIATE);
-      return; // must be at least 4 if it sent the 4 byte address
-    } 
+      uint32_t address = (uint32_t) rx_data[0] | ((uint32_t) rx_data[1] << 8) | ((uint32_t) rx_data[2] << 16) | ((uint32_t) rx_data[3] << 24);
 
-    dwt_readrxdata(rx_data, rx_len, 0);
+      if (address == TRANSMITTER_ADDRESS) {
+        Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
 
-    uint32_t address = (uint32_t) rx_data[0] | ((uint32_t) rx_data[1] << 8) | ((uint32_t) rx_data[2] << 16) | ((uint32_t) rx_data[3] << 24);
-    if (address != RECEIVER_ADDRESS) {
-      dwt_rxenable(DWT_START_RX_IMMEDIATE);
-      return; // not for me!
-    }
+        if (rx_data[4] == 0x2D) {
+          int max_steps = (uint32_t) rx_data[5] | ((uint32_t) rx_data[6] << 8) |
+                    ((uint32_t) rx_data[7] << 16) | ((uint32_t) rx_data[8] << 24);
 
-    if (rx_len == 10) { // this means a timestamp was sent (timestamp is 5 bytes)
-      uint64_t ts = (uint64_t) rx_data[5] | ((uint64_t) rx_data[6] << 8) |
-       ((uint64_t) rx_data[7] << 16) | ((uint64_t) rx_data[8] << 24) |
-       ((uint64_t) rx_data[9] << 32);
+          Serial.printf("Max Steps: %d\n", max_steps);
+        } else if (rx_data[4] == 0xDD) {
+          int max_reciever_distance = (uint32_t) rx_data[5] | ((uint32_t) rx_data[6] << 8) |
+                    ((uint32_t) rx_data[7] << 16) | ((uint32_t) rx_data[8] << 24);
 
-      if (rx_data[4] == 0x10) {
-        // load timestamp value into t1, 0x01 means it is t1 that is being sent (0x01 was sent, so 0x10 will be received)
-        t1 = ts;
+          Serial.printf("Max distance: %d\n", max_reciever_distance);
+        }
 
-        uint8_t ts2[5];
-        dwt_readrxtimestamp(ts2);
+        else if (rx_data[4] == 0xAA && digitalRead(AUTO)) { // if the receiver sends AA it means it is requesting we do the "initial" sequence again
+          initiate(0xA0);
+        } else if (rx_data[4] == 0x03) {
+          // gather timestamp 4
+          uint8_t ts4[5];
+          dwt_readrxtimestamp(ts4);
 
-        t2 = (uint64_t) ts2[0] | ((uint64_t) ts2[1] << 8) |
-        ((uint64_t) ts2[2] << 16) | ((uint64_t) ts2[3] << 24) |
-        ((uint64_t) ts2[4] << 32);
-    
-        respond(TRANSMITTER_ADDRESS);
-      } else if (rx_data[4] == 0x40) {
-        // load timestamp value into t4, 0x04 means it is t4 that is being sent (0x04 was sent, so 0x40 will be received)
-        t4 = ts;
-
-        // after receiving t4 we don't want to do anymore measurements, we have everything we need now
-        calculateDistance();
-
-        dwt_rxenable(DWT_START_RX_IMMEDIATE);
-        return;
+          t4 = (uint64_t) ts4[0] | ((uint64_t) ts4[1] << 8) |
+          ((uint64_t) ts4[2] << 16) | ((uint64_t) ts4[3] << 24) |
+          ((uint64_t) ts4[4] << 32);
+      
+          respond(RECEIVER_ADDRESS);
+        }
       }
     }
-  } else {
-    dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
+  } else if (status & (SYS_STATUS_RXFCE_BIT_MASK | SYS_STATUS_RXFSL_BIT_MASK | SYS_STATUS_RXFTO_BIT_MASK | SYS_STATUS_RXOVRR_BIT_MASK)) {
+    dwt_forcetrxoff();
   }
 
+  dwt_write32bitreg(SYS_STATUS_ID, status); // clear all status bits
+
+  uint32_t leftover_status = dwt_read32bitreg(SYS_STATUS_ID);
+  if (leftover_status) {
+    dwt_write32bitreg(SYS_STATUS_ID, leftover_status);
+  }
+
+  uwb_irq = false;
   dwt_rxenable(DWT_START_RX_IMMEDIATE);
+}
+
+void initiate(uint8_t command) {
+  initiated = true;
+
+  // build the auto mode packet
+  uint8_t tx_packet1[1] = {command};
+  send(RECEIVER_ADDRESS, tx_packet1, 1);
+
+  // read the 1st timestamp
+  uint8_t ts1[5];
+  dwt_readtxtimestamp(ts1);
+
+  t1 = (uint64_t)  ts1[0] | ((uint64_t) ts1[1] << 8) |
+       ((uint64_t) ts1[2] << 16) | ((uint64_t) ts1[3] << 24) |
+       ((uint64_t) ts1[4] << 32);
 }
 
 void respond(uint32_t dest_address) {
-  uint64_t data = (uint64_t) (dest_address) | ((uint64_t) (0x03) << 32);
-  
-  uint8_t data_arr[5];
-  memcpy(data_arr, &data, sizeof(data_arr));
+  // build the t4 packet
+  uint8_t tx_packet[6];
+  tx_packet[0] = 0x04; // Byte 4: Indicate t4
+  memcpy(&tx_packet[1], &t4, 5); // Bytes 5-9: Timestamp
 
-  dwt_writetxdata(sizeof(data_arr), data_arr, 0);
-  dwt_writetxfctrl(sizeof(data_arr) + 2, 0, 0);
-  
-  int ret = dwt_starttx(DWT_START_TX_IMMEDIATE);
+  send(dest_address, tx_packet, 6);
 
-  if (ret != DWT_SUCCESS) {
+  // capture timestamp 5
+  uint8_t ts5[5];
+  dwt_readtxtimestamp(ts5);
+
+  t5 = (uint64_t)  ts5[0] | ((uint64_t) ts5[1] << 8) |
+       ((uint64_t) ts5[2] << 16) | ((uint64_t) ts5[3] << 24) |
+       ((uint64_t) ts5[4] << 32);
+
+  delay(3);
+
+  uint8_t tx_packet2[11];
+  tx_packet2[0] = 0x15; // Byte 4: Indicate t1 and t5
+  memcpy(&tx_packet2[1], &t1, 5); // Bytes 5-9: Timestamp 1
+  memcpy(&tx_packet2[6], &t5, 5); // Bytes 10-14: Timestamp 
+
+  send(dest_address, tx_packet2, 11);
+}
+
+void send(uint32_t dest_address, uint8_t data[], int data_size) {
+  // force idle
+  dwt_forcetrxoff(); 
+
+  // build packet
+  uint8_t tx_packet[4 + data_size];
+  memcpy(&tx_packet[0], &dest_address, 4);
+
+  //Serial.printf("data[0] = 0x%X\n", data[0]);
+
+  for (int i = 0; i < data_size; i++) {
+    tx_packet[4 + i] = data[i];
+  }
+
+  // write packet
+  dwt_writetxdata(sizeof(tx_packet), tx_packet, 0);
+  dwt_writetxfctrl(sizeof(tx_packet) + 2, 0, 0);
+  
+  // transmit packet
+  if (dwt_starttx(DWT_START_TX_IMMEDIATE) != DWT_SUCCESS) {
     Serial.println("Could not respond");
   }
 
-  // now we wait until the transmit finishes
-  while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK));
+  // wait until transmit finishes or times out
+  uint32_t start_ms = millis();
+  while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK)) {
+     if (millis() - start_ms > 100) {
+      Serial.println("TX Timeout");
+      break;
+     }
+  }
 
-  uint8_t ts3[5];
-  dwt_readtxtimestamp(ts3);
-
-  t3 = (uint64_t) ts3[0] | ((uint64_t) ts3[1] << 8) |
-        ((uint64_t) ts3[2] << 16) | ((uint64_t) ts3[3] << 24) |
-        ((uint64_t) ts3[4] << 32);
-
-  dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK); // clear the transmit finish status bit by sending a 1 to it
-  dwt_rxenable(DWT_START_RX_IMMEDIATE);
-
-  // this commented code is how the transmitter will send its two timestamps
-  // for t1 it first sends 0xAA to indicate automode then it measures the TXTimestamp and sends at as so:
-
-  // __uint128_t data = (__uint128_t) (dest_address) | ((__uint128_t) (0x01) << 32) | ((__uint128_t) (t1) << 40);
-
-  // uint8_t data_arr[10];
-  // memcpy(data_arr, &data, sizeof(data));
-
-  // dwt_writetxdata(sizeof(data_arr), data_arr, 0);
-  // dwt_writetxfctrl(sizeof(data_arr) + 2, 0, 0);
-  
-  // int ret = dwt_starttx(DWT_START_TX_IMMEDIATE);
-}
-
-void calculateDistance() {
-  int16_t clock_offset = dwt_readclockoffset();
-  double round_trip_time = (double) (t4 - t1) * (1 + clock_offset); // corrected to take the offset between the transmitter and receiver clocks into account
-  double reply_time = (double) (t3 - t2);
-
-  float ToF = 15.65E-12 * (round_trip_time - reply_time)/2; // time of flight in seconds
-  float distance = ToF * 3E8 * 100; // multiply ToF by 100 to get the distance in cm
-  distance -= 51.1; // this is supposed to account for the travel time through the pcb traces. change this as necessary if there is a constant offset noticed
-
-  Serial.println("Distance: " + String(distance));
+  dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
 }
 
 void resetDWM() {

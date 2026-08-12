@@ -49,7 +49,7 @@
 
 #define DWM_ID 0xDECA0302
 
-#define RECEIVER_ADDRESS    0x10000000
+#define RECEIVER_ADDRESS    0x00000001
 #define TRANSMITTER_ADDRESS 0x00000002
 
 // spi definitions
@@ -58,28 +58,49 @@
 #define MOSI 3
 #define CS   1
 #define SPI_CLK_SPEED 2000000 // 2MHz
-// DWM3000 Recieves Data MSB First
+// DWM3000 Receives Data MSB First
 
 #define READ_DUMMY 0x00
 
 void printDWMDiagnostics();
 void resetDWM();
 
+void moveSteppers(int left_steps, int right_steps);
 void checkData();
-void calculateDistance();
+float calculateDistance();
 void respond(uint32_t dest_address);
+void send(uint32_t dest_address, uint8_t data[], int data_size);
 float tofSensorDistance(uint8_t address);
 void calibrateTof();
 
-volatile bool uwb_irq = false;
+volatile bool uwb_irq = true;
 uint16_t rx_len = 0;   
 uint32_t rx_finfo;
 uint8_t rx_data[64];
 
+float d1, d2, d3, d4;    // d1 -> initial distance between robot and transmitter
+                         // d2 -> distance between robot and transmitter after moving by L
+#define L 25             // constant 25cm to move forward by when triangulating
+#define L_STEPS 235      // L in steps
+#define STEPS_360 470    // 470 steps for 360 degree turn
+#define D_MULT 9.41      // multiply d (in cm) by 9.41 to get how many steps to move
+#define WIDTH 12.1       // wheel to wheel outer width of robot is 12cm
+#define LENGTH 13.57     // front of the car to the dwm3000 is 13.57cm
+#define RADIUS 3.3825    // 3.3825cm radius of wheel (no tire)
+
+float current_distance;
+float max_distance;
+int max_distance_steps; // how many steps it took to get to the max distance
+
+enum class STATES {INITIAL, SECOND, THIRD, VERIFY, FINISH};
+STATES STATE = STATES::INITIAL;
+
 uint64_t t1; // timestamp when transmitter sent frame
 uint64_t t2; // timestamp when receiver received frame
 uint64_t t3; // timestamp when receiver sent response
-uint64_t t4; // timestamp when transmitter recieved response
+uint64_t t4; // timestamp when transmitter received response
+uint64_t t5; // timestamp when transmitted sends second frame
+uint64_t t6; // timestamp when receiever received second frame
 
 Adafruit_VL53L0X tof1 = Adafruit_VL53L0X();
 Adafruit_VL53L0X tof2 = Adafruit_VL53L0X();
@@ -212,6 +233,9 @@ void setup() {
   }
   // End DWM3000 Initialization
 
+  // setup interrupts
+  dwt_setinterrupt(DWT_INT_RX | DWT_INT_TFRS, 0, DWT_ENABLE_INT_ONLY);
+
   // note that the pin_irq is already set up as an input in spiBegin()
   attachInterrupt(digitalPinToInterrupt(PIN_IRQ), dwm3000_isr, RISING);
 
@@ -220,21 +244,18 @@ void setup() {
   printDWMDiagnostics();
 }
 
-void loop () {
+void loop() {
   // poll for interrupts
-  if (uwb_irq) {
-    Serial.println("Checking Data");
-    checkData();
-  }
+  if (uwb_irq) checkData();
 
-  static uint32_t last_check = 0;
+  /*static uint32_t last_check = 0;
   if (millis() - last_check > 5000) {
       printDWMDiagnostics();
       last_check = millis();
       
       // ensure dwm is still active
       dwt_rxenable(DWT_START_RX_IMMEDIATE);
-  }
+  }*/
 
   /*leftStepper.stepperLoop();
   rightStepper.stepperLoop();
@@ -279,125 +300,306 @@ void loop () {
   }*/
 }
 
+float theta_steps;
+int total_steps = 0;
+
 void checkData() {
-  if (!uwb_irq) return;
   uwb_irq = false;
 
+  delayMicroseconds(10);
   uint32_t status = dwt_read32bitreg(SYS_STATUS_ID);
 
   if (status & SYS_STATUS_RXFCG_BIT_MASK) {
     rx_finfo = dwt_read32bitreg(RX_FINFO_ID);
     rx_len = (uint16_t) (rx_finfo & RX_FINFO_RXFLEN_BIT_MASK); // frame length is stored within the least significant 10 bits
-
     rx_len -=2; // removes the CRC bytes from the length
 
     if (rx_len > 64) {
       Serial.printf("[ERROR] rx length of %d is too long (max 64)\n", rx_len);
-      dwt_rxenable(DWT_START_RX_IMMEDIATE);
-      return;
-    }
+    } else if (rx_len < 5) { // must be at least 5 if it sent the 4 byte address and a message
+      Serial.printf("[ERROR] rx length of %d is too short (min 5)\n", rx_len);
+    } else {
+      dwt_readrxdata(rx_data, rx_len, 0);
 
-    if (rx_len < 4) {
-      Serial.printf("[ERROR] rx length of %d is too short (min 4)\n", rx_len);
-      dwt_rxenable(DWT_START_RX_IMMEDIATE);
-      return; // must be at least 4 if it sent the 4 byte address
-    } 
+      uint32_t address = (uint32_t) rx_data[0] | ((uint32_t) rx_data[1] << 8) | ((uint32_t) rx_data[2] << 16) | ((uint32_t) rx_data[3] << 24);
 
-    dwt_readrxdata(rx_data, rx_len, 0);
+      if (address = RECEIVER_ADDRESS) {
+        Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
 
-    uint32_t address = (uint32_t) rx_data[0] | ((uint32_t) rx_data[1] << 8) | ((uint32_t) rx_data[2] << 16) | ((uint32_t) rx_data[3] << 24);
-    if (address != RECEIVER_ADDRESS) {
-      dwt_rxenable(DWT_START_RX_IMMEDIATE);
-      return; // not for me!
-    }
+        if (rx_data[4] == 0x2D) {
+          uint8_t data[5];
+          data[0] = 0x2D;
+          memcpy(&data[1], &max_distance_steps, 4);
+          send(TRANSMITTER_ADDRESS, data, 5);
 
-    if (rx_len == 10) { // this means a timestamp was sent (timestamp is 5 bytes)
-      uint64_t ts = (uint64_t) rx_data[5] | ((uint64_t) rx_data[6] << 8) |
-       ((uint64_t) rx_data[7] << 16) | ((uint64_t) rx_data[8] << 24) |
-       ((uint64_t) rx_data[9] << 32);
+          STATE = STATES::FINISH;
+          //Serial.printf("Total steps: %d\n", total_steps);
+        }
 
-      if (rx_data[4] == 0x10) {
-        // load timestamp value into t1, 0x01 means it is t1 that is being sent (0x01 was sent, so 0x10 will be received)
-        t1 = ts;
+        else if (rx_data[4] == 0xAA) { // AA means auto mode started from transmitter so we need to go back to initial state
+          // moveSteppers(-310, 310);
+          // return;
 
-        uint8_t ts2[5];
-        dwt_readrxtimestamp(ts2);
+          STATE = STATES::INITIAL;
+          total_steps = 0;
+          max_distance = 0;
 
-        t2 = (uint64_t) ts2[0] | ((uint64_t) ts2[1] << 8) |
-        ((uint64_t) ts2[2] << 16) | ((uint64_t) ts2[3] << 24) |
-        ((uint64_t) ts2[4] << 32);
-    
-        respond(TRANSMITTER_ADDRESS);
-      } else if (rx_data[4] == 0x40) {
-        // load timestamp value into t4, 0x04 means it is t4 that is being sent (0x04 was sent, so 0x40 will be received)
-        t4 = ts;
+          // Capture t2 IMMEDIATELY for the poll packet (0xAA)
+          uint8_t ts2[5];
 
-        // after receiving t4 we don't want to do anymore measurements, we have everything we need now
-        calculateDistance();
+          dwt_readrxtimestamp(ts2);
 
-        dwt_rxenable(DWT_START_RX_IMMEDIATE);
-        return;
+          t2 = (uint64_t) ts2[0] | ((uint64_t) ts2[1] << 8) |
+          ((uint64_t) ts2[2] << 16) | ((uint64_t) ts2[3] << 24) |
+          ((uint64_t) ts2[4] << 32);
+
+          // respond and capture t3
+          respond(TRANSMITTER_ADDRESS);
+        } else if (rx_data[4] == 0xA0) { // A0 means another request was recieved at the transmitter so we want to keep the state as is
+          // Capture t2 IMMEDIATELY for the poll packet (0xA0)
+          uint8_t ts2[5];
+
+          dwt_readrxtimestamp(ts2);
+
+          t2 = (uint64_t) ts2[0] | ((uint64_t) ts2[1] << 8) |
+          ((uint64_t) ts2[2] << 16) | ((uint64_t) ts2[3] << 24) |
+          ((uint64_t) ts2[4] << 32);
+
+          // respond and capture t3
+          respond(TRANSMITTER_ADDRESS);
+        } else if (rx_len == 10) { // this means a timestamp was sent (timestamp is 5 bytes)
+          uint64_t ts = (uint64_t) rx_data[5] | ((uint64_t) rx_data[6] << 8) |
+          ((uint64_t) rx_data[7] << 16) | ((uint64_t) rx_data[8] << 24) |
+          ((uint64_t) rx_data[9] << 32);
+
+          if (rx_data[4] == 0x04) {
+            // load timestamp value into t4, 0x04 means it is t4 that is being sent
+            t4 = ts;
+
+            uint8_t ts6[5];
+
+            dwt_readrxtimestamp(ts6);
+
+            t6 = (uint64_t)  ts6[0] | ((uint64_t) ts6[1] << 8) |
+                ((uint64_t) ts6[2] << 16) | ((uint64_t) ts6[3] << 24) |
+                ((uint64_t) ts6[4] << 32);
+          }
+        } else if (rx_len == 15 && rx_data[4] == 0x15) { // two timestamps sent (t1 and t5)
+          t1 = (uint64_t)  rx_data[5] | ((uint64_t) rx_data[6] << 8) |
+              ((uint64_t) rx_data[7] << 16) | ((uint64_t) rx_data[8] << 24) |
+              ((uint64_t) rx_data[9] << 32);
+
+          t5 = (uint64_t)  rx_data[10] | ((uint64_t) rx_data[11] << 8) |
+              ((uint64_t) rx_data[12] << 16) | ((uint64_t) rx_data[13] << 24) |
+              ((uint64_t) rx_data[14] << 32);
+
+          current_distance = calculateDistance();
+
+          if (current_distance > max_distance) {
+            max_distance = current_distance;
+            max_distance_steps = total_steps;
+          }
+
+          // now that we have the final two timestamps we can calculate the distance
+          moveSteppers(-10, 10);
+          total_steps += 10;
+
+          // once we've done the 360 turn and found the max distance we need to go the max_distance_steps
+          // and then drive that max distance minus the length of the robot
+          if (total_steps >= STEPS_360) {
+            //moveSteppers(-max_distance_steps, max_distance_steps);
+            delay(500);
+
+            for (int i = 0; i < max_distance_steps; i+= 10) {
+              moveSteppers(-10, 10);
+            }
+
+            int distance_steps = (max_distance - LENGTH) * D_MULT;
+            moveSteppers(distance_steps, distance_steps);
+            
+            STATE = STATES::FINISH;
+          }
+
+          /*if (STATE == STATES::INITIAL) {
+            d1 = calculateDistance();
+            //Serial.printf("d1: %.2f\n", d1);
+
+            // move forward by L
+            moveSteppers(L_STEPS, L_STEPS);
+
+            STATE = STATES::SECOND;
+          } else if (STATE == STATES::SECOND) {
+            d2 = calculateDistance();
+
+            float theta = PI - acos(L*L + d2*d2 - d1*d1) / (2*L*d2);
+            float theta_cm = WIDTH * sin(theta);
+            theta_steps = theta_cm * 360/(2*PI*RADIUS) * 1/1.8;
+
+            //Serial.printf("theta: %.2f degrees\n", degrees(theta));
+
+            // turn right by theta
+            moveSteppers(theta_steps, -theta_steps);
+
+            // move forward by L
+            moveSteppers(L_STEPS, L_STEPS);
+
+            STATE = STATES::THIRD;        
+          } else if (STATE == STATES::THIRD) {
+            d3 = calculateDistance();
+            //Serial.printf("d2: %.2f\n", d2);
+
+            // subtract 13.57 because the dwm is 13.57cm from the front of the car
+            // and while we are moving by d2_steps we are facing the transmitter
+            int d2_steps = (d2 - 12) * D_MULT;
+            int d3_steps = (d3 - 12) * D_MULT;
+
+            // if we are now farther than d2 it means turning right was incorrect
+            if (d3 > d2) {
+              // backup by L
+              moveSteppers(-L_STEPS, -L_STEPS);
+
+              // turn left by 2*theta
+              moveSteppers(-theta_steps*2, theta_steps*2);
+
+              // move forward by d2
+              moveSteppers(d2_steps, d2_steps);
+            } else { // if we make it here turning right was correct
+              moveSteppers(d3_steps, d3_steps);
+            }
+
+            // once this finishes we *should* be at the transmitter but we can double check
+            STATE = STATES::VERIFY;
+          } else if (STATE == STATES::VERIFY) {
+            d4 = calculateDistance();
+
+            // if we are not within L we can try again
+            if (d4 < L) {
+              STATE = STATES::FINISH;
+            } else {
+              STATE = STATES::INITIAL;
+            }
+          }
+
+          if (STATE != STATES::FINISH) {
+            uint8_t data[1] = {0xAA};
+            send(TRANSMITTER_ADDRESS, data, 1);
+          } else {
+            STATE = STATES::INITIAL;
+          }*/
+
+          if (STATE != STATES::FINISH) {
+            //Serial.println("Sending 0xAA");
+            uint8_t data[1] = {0xAA};
+            send(TRANSMITTER_ADDRESS, data, 1);
+          } else {
+            uint8_t data[5];
+            data[0] = 0xDD;
+            int sending_distance = (int) max_distance;
+            memcpy(&data[1], &sending_distance, 4);
+            send(TRANSMITTER_ADDRESS, data, 5);
+          }
+        }
       }
     }
-  } else {
-    dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_ERR);
+  } else if (status & (SYS_STATUS_RXFCE_BIT_MASK | SYS_STATUS_RXFSL_BIT_MASK | SYS_STATUS_RXFTO_BIT_MASK | SYS_STATUS_RXOVRR_BIT_MASK)) {
+    dwt_forcetrxoff();
   }
 
+  dwt_write32bitreg(SYS_STATUS_ID, status); // clear all status bits
+
+  uint32_t leftover_status = dwt_read32bitreg(SYS_STATUS_ID);
+  if (leftover_status) {
+    dwt_write32bitreg(SYS_STATUS_ID, leftover_status);
+  }
+
+  uwb_irq = false;
   dwt_rxenable(DWT_START_RX_IMMEDIATE);
 }
 
 void respond(uint32_t dest_address) {
-  uint64_t data = (uint64_t) (dest_address) | ((uint64_t) (0x03) << 32);
-  
-  uint8_t data_arr[5];
-  memcpy(data_arr, &data, sizeof(data_arr));
-
-  dwt_writetxdata(sizeof(data_arr), data_arr, 0);
-  dwt_writetxfctrl(sizeof(data_arr) + 2, 0, 0);
-  
-  int ret = dwt_starttx(DWT_START_TX_IMMEDIATE);
-
-  if (ret != DWT_SUCCESS) {
-    Serial.println("Could not respond");
-  }
-
-  // now we wait until the transmit finishes
-  while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK));
+  uint8_t data[1] = {0x03};
+  send(dest_address, data, 1);
 
   uint8_t ts3[5];
   dwt_readtxtimestamp(ts3);
 
-  t3 = (uint64_t) ts3[0] | ((uint64_t) ts3[1] << 8) |
-        ((uint64_t) ts3[2] << 16) | ((uint64_t) ts3[3] << 24) |
-        ((uint64_t) ts3[4] << 32);
-
-  dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK); // clear the transmit finish status bit by sending a 1 to it
-  dwt_rxenable(DWT_START_RX_IMMEDIATE);
-
-  // this commented code is how the transmitter will send its two timestamps
-  // for t1 it first sends 0xAA to indicate automode then it measures the TXTimestamp and sends at as so:
-
-  // __uint128_t data = (__uint128_t) (dest_address) | ((__uint128_t) (0x01) << 32) | ((__uint128_t) (t1) << 40);
-
-  // uint8_t data_arr[10];
-  // memcpy(data_arr, &data, sizeof(data));
-
-  // dwt_writetxdata(sizeof(data_arr), data_arr, 0);
-  // dwt_writetxfctrl(sizeof(data_arr) + 2, 0, 0);
-  
-  // int ret = dwt_starttx(DWT_START_TX_IMMEDIATE);
+  t3 = (uint64_t)  ts3[0] | ((uint64_t) ts3[1] << 8) |
+       ((uint64_t) ts3[2] << 16) | ((uint64_t) ts3[3] << 24) |
+       ((uint64_t) ts3[4] << 32);
 }
 
-void calculateDistance() {
-  int16_t clock_offset = dwt_readclockoffset();
-  double round_trip_time = (double) (t4 - t1) * (1 + clock_offset); // corrected to take the offset between the transmitter and receiver clocks into account
-  double reply_time = (double) (t3 - t2);
+float filtered_distance = 0;
+bool initial_reading = true;
 
-  float ToF = 15.65E-12 * (round_trip_time - reply_time)/2; // time of flight in seconds
-  float distance = ToF * 3E8 * 100; // multiply ToF by 100 to get the distance in cm
-  distance -= 51.1; // this is supposed to account for the travel time through the pcb traces. change this as necessary if there is a constant offset noticed
+float calculateDistance() {
+  // Serial.printf("t1: %d\n", t1);
+  // Serial.printf("t2: %d\n", t2);
+  // Serial.printf("t3: %d\n", t3);
+  // Serial.printf("t4: %d\n", t4);
+  // Serial.printf("t5: %d\n", t5);
+  // Serial.printf("t6: %d\n", t6);
 
-  Serial.println("Distance: " + String(distance));
+  double round_trip_d1 = (double) ((t4 - t1) & 0xFFFFFFFFFF);
+  double reply_d1 = (double) ((t3 - t2) & 0xFFFFFFFFFF);
+  double round_trip_d2 = (double) ((t6 - t3) & 0xFFFFFFFFFF);
+  double reply_d2 = (double) ((t5 - t4) & 0xFFFFFFFFFF);
+
+  // Serial.printf("Round trip d1: %d\n", round_trip_d1);
+  // Serial.printf("Reply d1: %d\n", reply_d1);
+  // Serial.printf("Round trip d2: %d\n", round_trip_d2);
+  // Serial.printf("Reply d2: %d\n", reply_d2);
+
+  double tof = ((round_trip_d1 * round_trip_d2) - (reply_d1 * reply_d2)) / (round_trip_d1 + round_trip_d2 + reply_d1 + reply_d2);
+  double tof_seconds = tof * 15.65E-12;
+  float distance = tof_seconds * 3E8 * 100; // distance in cm
+  distance += 15; // correct for measured offset
+
+  // // Apply Exponential Moving Average (EMA) filter
+  // if (initial_reading) {
+  //   filtered_distance = distance;
+  //   initial_reading = false;
+  // } else {
+  //   float alpha = 0.2f; // Smoothing factor: 0.1 = very smooth/slow, 0.5 = twitchy/fast
+  //   filtered_distance = (alpha * distance) + ((1.0f - alpha) * filtered_distance);
+  // } 
+
+  //return filtered_distance;
+
+  Serial.printf("Distance: %.2f\n", distance);
+  return distance;
+}
+
+void send(uint32_t dest_address, uint8_t data[], int data_size) {
+  // force idle
+  dwt_forcetrxoff(); 
+
+  // build packet
+  uint8_t tx_packet[4 + data_size];
+  memcpy(&tx_packet[0], &dest_address, 4);
+
+  //Serial.printf("data[0] = 0x%X\n", data[0]);
+
+  for (int i = 0; i < data_size; i++) {
+    tx_packet[4 + i] = data[i];
+  }
+
+  // write packet
+  dwt_writetxdata(sizeof(tx_packet), tx_packet, 0);
+  dwt_writetxfctrl(sizeof(tx_packet) + 2, 0, 0);
+  
+  // transmit packet
+  if (dwt_starttx(DWT_START_TX_IMMEDIATE) != DWT_SUCCESS) {
+    Serial.println("Could not respond");
+  }
+
+  // wait until transmit finishes or times out
+  uint32_t start_ms = millis();
+  while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK)) {
+     if (millis() - start_ms > 100) {
+      Serial.println("TX Timeout");
+      break;
+     }
+  }
 }
 
 float tofSensorDistance(uint8_t address) {
@@ -448,6 +650,21 @@ void calibrateTof() {
 
   Serial.printf("AVG: %.2f\n", sum/10.0f);
   delay(500);
+}
+
+// moves both steppers (not just a scheduler)
+// put steps negative to be backwards, postive for forwards
+void moveSteppers(int left_steps, int right_steps) {
+  int left_dir = left_steps < 0 ? LEFT_STEPPER_BACKWARD : LEFT_STEPPER_FORWARD;
+  int right_dir = right_steps < 0 ? RIGHT_STEPPER_BACKWARD : RIGHT_STEPPER_FORWARD;
+
+  leftStepper.moveStepper(left_dir, abs(left_steps));        
+  rightStepper.moveStepper(right_dir, abs(right_steps));  
+
+  while (leftStepper.isBusy() || rightStepper.isBusy()) {
+    leftStepper.stepperLoop();
+    rightStepper.stepperLoop();
+  }
 }
 
 void resetDWM() {
