@@ -38,8 +38,6 @@ void initiate(uint8_t command);
 void checkData();
 void respond(uint32_t dest_address);
 
-int max_distance;
-
 bool initiated = false;
 volatile bool uwb_irq = false;
 uint16_t rx_len = 0;   
@@ -148,39 +146,49 @@ void setup() {
   printDWMDiagnostics();
 }
 
-//uint32_t last_tx_time = 0;
+uint32_t last_packet_time = 0;
+bool watchdog_active = false;
 
 void loop() {
   if (!digitalRead(AUTO) && initiated) {
-    Serial.println("Sending 0x2D");
-    initiate(0x2D);
-    initiated = false;
-  } else if (digitalRead(AUTO) && !initiated) {
-    Serial.println("Sending Auto Mode");
-    max_distance = 0;
-    initiate(0xAA); 
-    //last_tx_time = millis();
-  }
+    Serial.println("Sending 0xFF");
+    initiate(0xFF);
+    dwt_rxenable(DWT_START_RX_IMMEDIATE);
 
-  // if (initiated && (millis() - last_tx_time > 150)) {xx
-  //   // timed out
-  //   initiated = false;
-  // }
+    initiated = false;
+    watchdog_active = false; // Turn off watchdog when stopped
+  } else if (digitalRead(AUTO) && !initiated) {
+    uwb_irq = false;
+    rx_len = 0;   
+    rx_finfo = 0;
+
+    t1 = 0;
+    t4 = 0;
+    t5 = 0;
+
+    Serial.println("Sending Auto Mode");
+    
+    initiate(0xAA);
+    dwt_rxenable(DWT_START_RX_IMMEDIATE);
+
+    // Start tracking inactivity when auto mode begins
+    last_packet_time = millis();
+    watchdog_active = true;
+  }
 
   // poll for interrupts
   if (uwb_irq) {
-    //last_tx_time = millis();
+    last_packet_time = millis();
     checkData();
   }
 
-  /*static uint32_t last_check = 0;
-  if (millis() - last_check > 5000) {
-      printDWMDiagnostics();
-      last_check = millis();
-      
-      // ensure dwm is still active
-      dwt_rxenable(DWT_START_RX_IMMEDIATE);
-  }*/
+  // ---> INACTIVITY WATCHDOG TIMER <---
+  // If Auto mode is supposed to be running, but we haven't heard a single 
+  // packet from the receiver in 5 full seconds, something has frozen.
+  if (watchdog_active && (millis() - last_packet_time > 5000)) {
+    Serial.println("[DIAGNOSTIC] Connection lost! Receiver stopped communicating mid-run.");
+    watchdog_active = false; // Stop spamming the message
+  }
 }
 
 void checkData() {
@@ -204,18 +212,19 @@ void checkData() {
       uint32_t address = (uint32_t) rx_data[0] | ((uint32_t) rx_data[1] << 8) | ((uint32_t) rx_data[2] << 16) | ((uint32_t) rx_data[3] << 24);
 
       if (address == TRANSMITTER_ADDRESS) {
-        Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
+        //Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
 
-        if (rx_data[4] == 0x2D) {
-          int max_steps = (uint32_t) rx_data[5] | ((uint32_t) rx_data[6] << 8) |
-                    ((uint32_t) rx_data[7] << 16) | ((uint32_t) rx_data[8] << 24);
+        if (rx_data[4] == 0xDD) {
+          float prev_distance;
+          float current_distance;
 
-          Serial.printf("Max Steps: %d\n", max_steps);
-        } else if (rx_data[4] == 0xDD) {
-          int max_reciever_distance = (uint32_t) rx_data[5] | ((uint32_t) rx_data[6] << 8) |
-                    ((uint32_t) rx_data[7] << 16) | ((uint32_t) rx_data[8] << 24);
+          memcpy(&prev_distance, &rx_data[5], 4);
+          memcpy(&current_distance, &rx_data[9], 4);
 
-          Serial.printf("Max distance: %d\n", max_reciever_distance);
+          Serial.printf("Previous distance: %.2f, ", prev_distance);
+          Serial.printf("Current distance: %.2f\n", current_distance);
+        } else if (rx_data[4] == 0xFF) {
+          Serial.printf("Finished\n");
         }
 
         else if (rx_data[4] == 0xAA && digitalRead(AUTO)) { // if the receiver sends AA it means it is requesting we do the "initial" sequence again
@@ -244,7 +253,6 @@ void checkData() {
     dwt_write32bitreg(SYS_STATUS_ID, leftover_status);
   }
 
-  uwb_irq = false;
   dwt_rxenable(DWT_START_RX_IMMEDIATE);
 }
 

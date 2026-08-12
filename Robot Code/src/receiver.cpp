@@ -78,19 +78,17 @@ uint16_t rx_len = 0;
 uint32_t rx_finfo;
 uint8_t rx_data[64];
 
-float d1, d2, d3, d4;    // d1 -> initial distance between robot and transmitter
-                         // d2 -> distance between robot and transmitter after moving by L
-#define L 25             // constant 25cm to move forward by when triangulating
-#define L_STEPS 235      // L in steps
-#define STEPS_360 470    // 470 steps for 360 degree turn
+#define TURN_STEPS 50    // how many steps to turn by when finding the max distance
 #define D_MULT 9.41      // multiply d (in cm) by 9.41 to get how many steps to move
 #define WIDTH 12.1       // wheel to wheel outer width of robot is 12cm
 #define LENGTH 13.57     // front of the car to the dwm3000 is 13.57cm
 #define RADIUS 3.3825    // 3.3825cm radius of wheel (no tire)
+#define CLEARANCE 2      // how much below prev_distance current_distance needs to be to trigger a lock
 
 float current_distance;
-float max_distance;
-int max_distance_steps; // how many steps it took to get to the max distance
+float prev_distance;
+int incrementing;
+bool initial_reading = true;
 
 enum class STATES {INITIAL, SECOND, THIRD, VERIFY, FINISH};
 STATES STATE = STATES::INITIAL;
@@ -110,9 +108,6 @@ int leftPins[3] = {STEP1, DIR1, EN1};
 int rightPins[3] = {STEP2, DIR2, EN2};
 stepper leftStepper(leftPins);
 stepper rightStepper(rightPins);
-
-bool forward = false;
-int turn_attempts = 0;
 
 void dwm3000_isr() {
   uwb_irq = true;
@@ -247,61 +242,9 @@ void setup() {
 void loop() {
   // poll for interrupts
   if (uwb_irq) checkData();
-
-  /*static uint32_t last_check = 0;
-  if (millis() - last_check > 5000) {
-      printDWMDiagnostics();
-      last_check = millis();
-      
-      // ensure dwm is still active
-      dwt_rxenable(DWT_START_RX_IMMEDIATE);
-  }*/
-
-  /*leftStepper.stepperLoop();
-  rightStepper.stepperLoop();
-
-  if (forward) {
-    // check that neither motor is busy
-    if (!leftStepper.isBusy() && !rightStepper.isBusy()) {
-      leftStepper.moveStepper(LEFT_STEPPER_FORWARD, 200);
-      rightStepper.moveStepper(RIGHT_STEPPER_FORWARD, 200);
-
-      turn_attempts = 0;
-    }
-
-    forward = false;
-  } else {
-    // check that neither motor is busy
-    if (!leftStepper.isBusy() && !rightStepper.isBusy()) {
-      // if turn_attempts is relatively high, we are probably stuck so we should try going forwards
-      if (turn_attempts < 4) {
-        // check if we need to turn
-        float left_dist = tofSensorDistance(TOF3_ADDR);
-        float right_dist = tofSensorDistance(TOF2_ADDR);
-
-        // turning left
-        if (right_dist == OUT_OF_RANGE || (left_dist - right_dist > 50)) {
-          leftStepper.moveStepper(LEFT_STEPPER_BACKWARD, TURNING_RADIUS);
-          rightStepper.moveStepper(RIGHT_STEPPER_FORWARD, TURNING_RADIUS);
-        }
-
-        // turning right
-        if (left_dist == OUT_OF_RANGE || (left_dist - right_dist < -50)) {
-          leftStepper.moveStepper(LEFT_STEPPER_FORWARD, TURNING_RADIUS);
-          rightStepper.moveStepper(RIGHT_STEPPER_BACKWARD, TURNING_RADIUS);
-        }
-
-        turn_attempts ++;
-      }
-
-      // after turning continue going straight
-      forward = true;
-    }
-  }*/
 }
 
 float theta_steps;
-int total_steps = 0;
 
 void checkData() {
   uwb_irq = false;
@@ -324,25 +267,16 @@ void checkData() {
       uint32_t address = (uint32_t) rx_data[0] | ((uint32_t) rx_data[1] << 8) | ((uint32_t) rx_data[2] << 16) | ((uint32_t) rx_data[3] << 24);
 
       if (address = RECEIVER_ADDRESS) {
-        Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
+        //Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
 
-        if (rx_data[4] == 0x2D) {
-          uint8_t data[5];
-          data[0] = 0x2D;
-          memcpy(&data[1], &max_distance_steps, 4);
-          send(TRANSMITTER_ADDRESS, data, 5);
-
+        if (rx_data[4] == 0xFF) {
           STATE = STATES::FINISH;
-          //Serial.printf("Total steps: %d\n", total_steps);
-        }
-
-        else if (rx_data[4] == 0xAA) { // AA means auto mode started from transmitter so we need to go back to initial state
-          // moveSteppers(-310, 310);
-          // return;
-
+        } else if (rx_data[4] == 0xAA) { // AA means auto mode started from transmitter so we need to go back to initial state
           STATE = STATES::INITIAL;
-          total_steps = 0;
-          max_distance = 0;
+          incrementing = 0;
+          initial_reading = true;
+          prev_distance = -1;
+          current_distance = -1;
 
           // Capture t2 IMMEDIATELY for the poll packet (0xAA)
           uint8_t ts2[5];
@@ -385,6 +319,7 @@ void checkData() {
                 ((uint64_t) ts6[4] << 32);
           }
         } else if (rx_len == 15 && rx_data[4] == 0x15) { // two timestamps sent (t1 and t5)
+          // now that we have the final two timestamps we can calculate the distance
           t1 = (uint64_t)  rx_data[5] | ((uint64_t) rx_data[6] << 8) |
               ((uint64_t) rx_data[7] << 16) | ((uint64_t) rx_data[8] << 24) |
               ((uint64_t) rx_data[9] << 32);
@@ -395,108 +330,36 @@ void checkData() {
 
           current_distance = calculateDistance();
 
-          if (current_distance > max_distance) {
-            max_distance = current_distance;
-            max_distance_steps = total_steps;
-          }
+          moveSteppers(-TURN_STEPS, -TURN_STEPS);
+          delay(10);
 
-          // now that we have the final two timestamps we can calculate the distance
-          moveSteppers(-10, 10);
-          total_steps += 10;
-
-          // once we've done the 360 turn and found the max distance we need to go the max_distance_steps
-          // and then drive that max distance minus the length of the robot
-          if (total_steps >= STEPS_360) {
-            //moveSteppers(-max_distance_steps, max_distance_steps);
-            delay(500);
-
-            for (int i = 0; i < max_distance_steps; i+= 10) {
-              moveSteppers(-10, 10);
-            }
-
-            int distance_steps = (max_distance - LENGTH) * D_MULT;
-            moveSteppers(distance_steps, distance_steps);
-            
+          if (prev_distance != -1 && (current_distance - prev_distance > CLEARANCE)) {
             STATE = STATES::FINISH;
           }
 
-          /*if (STATE == STATES::INITIAL) {
-            d1 = calculateDistance();
-            //Serial.printf("d1: %.2f\n", d1);
-
-            // move forward by L
-            moveSteppers(L_STEPS, L_STEPS);
-
-            STATE = STATES::SECOND;
-          } else if (STATE == STATES::SECOND) {
-            d2 = calculateDistance();
-
-            float theta = PI - acos(L*L + d2*d2 - d1*d1) / (2*L*d2);
-            float theta_cm = WIDTH * sin(theta);
-            theta_steps = theta_cm * 360/(2*PI*RADIUS) * 1/1.8;
-
-            //Serial.printf("theta: %.2f degrees\n", degrees(theta));
-
-            // turn right by theta
-            moveSteppers(theta_steps, -theta_steps);
-
-            // move forward by L
-            moveSteppers(L_STEPS, L_STEPS);
-
-            STATE = STATES::THIRD;        
-          } else if (STATE == STATES::THIRD) {
-            d3 = calculateDistance();
-            //Serial.printf("d2: %.2f\n", d2);
-
-            // subtract 13.57 because the dwm is 13.57cm from the front of the car
-            // and while we are moving by d2_steps we are facing the transmitter
-            int d2_steps = (d2 - 12) * D_MULT;
-            int d3_steps = (d3 - 12) * D_MULT;
-
-            // if we are now farther than d2 it means turning right was incorrect
-            if (d3 > d2) {
-              // backup by L
-              moveSteppers(-L_STEPS, -L_STEPS);
-
-              // turn left by 2*theta
-              moveSteppers(-theta_steps*2, theta_steps*2);
-
-              // move forward by d2
-              moveSteppers(d2_steps, d2_steps);
-            } else { // if we make it here turning right was correct
-              moveSteppers(d3_steps, d3_steps);
-            }
-
-            // once this finishes we *should* be at the transmitter but we can double check
-            STATE = STATES::VERIFY;
-          } else if (STATE == STATES::VERIFY) {
-            d4 = calculateDistance();
-
-            // if we are not within L we can try again
-            if (d4 < L) {
-              STATE = STATES::FINISH;
-            } else {
-              STATE = STATES::INITIAL;
-            }
-          }
-
-          if (STATE != STATES::FINISH) {
-            uint8_t data[1] = {0xAA};
-            send(TRANSMITTER_ADDRESS, data, 1);
+          /*
+          if ((current_distance > prev_distance) && prev_distance != -1) {
+            incrementing++;
           } else {
-            STATE = STATES::INITIAL;
+            // if we were incrementing but now current_distance < max_distance
+            // it means our max distance was the previous one
+            if (incrementing >= 3 && (prev_distance - current_distance >= CLEARANCE)) {
+              //delay(500);
+              //moveSteppers(TURN_STEPS, -TURN_STEPS);
+              STATE = STATES::FINISH;
+            }
           }*/
 
           if (STATE != STATES::FINISH) {
-            //Serial.println("Sending 0xAA");
+            prev_distance = current_distance;
+
             uint8_t data[1] = {0xAA};
             send(TRANSMITTER_ADDRESS, data, 1);
           } else {
-            uint8_t data[5];
-            data[0] = 0xDD;
-            int sending_distance = (int) max_distance;
-            memcpy(&data[1], &sending_distance, 4);
-            send(TRANSMITTER_ADDRESS, data, 5);
+            uint8_t data[1] = {0xFF};
+            send(TRANSMITTER_ADDRESS, data, 1);      
+            
+            moveSteppers(TURN_STEPS, TURN_STEPS);
           }
         }
       }
@@ -512,7 +375,6 @@ void checkData() {
     dwt_write32bitreg(SYS_STATUS_ID, leftover_status);
   }
 
-  uwb_irq = false;
   dwt_rxenable(DWT_START_RX_IMMEDIATE);
 }
 
@@ -529,7 +391,6 @@ void respond(uint32_t dest_address) {
 }
 
 float filtered_distance = 0;
-bool initial_reading = true;
 
 float calculateDistance() {
   // Serial.printf("t1: %d\n", t1);
@@ -554,18 +415,15 @@ float calculateDistance() {
   float distance = tof_seconds * 3E8 * 100; // distance in cm
   distance += 15; // correct for measured offset
 
-  // // Apply Exponential Moving Average (EMA) filter
+  // Apply Exponential Moving Average (EMA) filter
   // if (initial_reading) {
   //   filtered_distance = distance;
   //   initial_reading = false;
   // } else {
-  //   float alpha = 0.2f; // Smoothing factor: 0.1 = very smooth/slow, 0.5 = twitchy/fast
+  //   float alpha = 0.3f; // Smoothing factor: 0.1 = very smooth/slow, 0.5 = twitchy/fast
   //   filtered_distance = (alpha * distance) + ((1.0f - alpha) * filtered_distance);
   // } 
 
-  //return filtered_distance;
-
-  Serial.printf("Distance: %.2f\n", distance);
   return distance;
 }
 
@@ -600,6 +458,8 @@ void send(uint32_t dest_address, uint8_t data[], int data_size) {
       break;
      }
   }
+
+  dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
 }
 
 float tofSensorDistance(uint8_t address) {
