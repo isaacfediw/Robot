@@ -13,6 +13,10 @@
 #define RECEIVER_ADDRESS    0x00000001
 #define TRANSMITTER_ADDRESS 0x00000002
 
+// typical default antenna delays for the DWM3000
+#define TX_ANT_DLY 16385
+#define RX_ANT_DLY 16385
+
 // spi definitions
 #define SCK  2
 #define MISO 0
@@ -54,8 +58,8 @@ void dwm3000_isr() {
 
 dwt_config_t config = {
   5,
-  DWT_PLEN_128,
-  DWT_PAC8,
+  DWT_PLEN_1024,
+  DWT_PAC32,
   9,
   9,
   1,
@@ -127,6 +131,9 @@ void setup() {
   }
   Serial.println("Success!");
 
+  dwt_setrxantennadelay(RX_ANT_DLY);
+  dwt_settxantennadelay(TX_ANT_DLY);
+
   uint32_t dev_id = dwt_readdevid();
   Serial.printf("Dev ID: 0x%X\n", dev_id);
   if (dev_id == DWM_ID) {
@@ -188,6 +195,11 @@ void loop() {
   if (watchdog_active && (millis() - last_packet_time > 5000)) {
     Serial.println("[DIAGNOSTIC] Connection lost! Receiver stopped communicating mid-run.");
     watchdog_active = false; // Stop spamming the message
+    initiate(0xA0);
+    dwt_rxenable(DWT_START_RX_IMMEDIATE);
+
+    last_packet_time = millis();
+    watchdog_active = true;
   }
 }
 
@@ -214,20 +226,30 @@ void checkData() {
       if (address == TRANSMITTER_ADDRESS) {
         //Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
 
-        if (rx_data[4] == 0xDD) {
-          float prev_distance;
-          float current_distance;
+        if (rx_data[4] == 0xFF) {
+          dwt_rxenable(DWT_START_RX_IMMEDIATE);
 
+          watchdog_active = false; // Turn off watchdog when stopped
+
+          uint32_t prev_distance, current_distance;
           memcpy(&prev_distance, &rx_data[5], 4);
           memcpy(&current_distance, &rx_data[9], 4);
 
-          Serial.printf("Previous distance: %.2f, ", prev_distance);
-          Serial.printf("Current distance: %.2f\n", current_distance);
-        } else if (rx_data[4] == 0xFF) {
-          Serial.printf("Finished\n");
-        }
+          Serial.printf("Previous distance: %d, ", prev_distance);
+          Serial.printf("Current distance: %d\n", current_distance);
 
-        else if (rx_data[4] == 0xAA && digitalRead(AUTO)) { // if the receiver sends AA it means it is requesting we do the "initial" sequence again
+          Serial.printf("Finished\n");
+        } else if (rx_data[4] == 0xAA && digitalRead(AUTO)) { // if the receiver sends AA it means it is requesting we do the "initial" sequence again
+          uint32_t prev_distance, current_distance;
+
+          if (rx_len == 13) {
+            memcpy(&prev_distance, &rx_data[5], 4);
+            memcpy(&current_distance, &rx_data[9], 4);
+
+            Serial.printf("Previous distance: %d, ", prev_distance);
+            Serial.printf("Current distance: %d\n", current_distance);
+          }
+          
           initiate(0xA0);
         } else if (rx_data[4] == 0x03) {
           // gather timestamp 4
@@ -273,6 +295,8 @@ void initiate(uint8_t command) {
 }
 
 void respond(uint32_t dest_address) {
+  delay(2); // give the receiver time to re-enable its receiver
+
   // build the t4 packet
   uint8_t tx_packet[6];
   tx_packet[0] = 0x04; // Byte 4: Indicate t4
@@ -319,6 +343,7 @@ void send(uint32_t dest_address, uint8_t data[], int data_size) {
   // transmit packet
   if (dwt_starttx(DWT_START_TX_IMMEDIATE) != DWT_SUCCESS) {
     Serial.println("Could not respond");
+    return;
   }
 
   // wait until transmit finishes or times out

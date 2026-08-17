@@ -52,6 +52,10 @@
 #define RECEIVER_ADDRESS    0x00000001
 #define TRANSMITTER_ADDRESS 0x00000002
 
+// typical default antenna delays for the DWM3000
+#define TX_ANT_DLY 16385
+#define RX_ANT_DLY 16385
+
 // spi definitions
 #define SCK  2
 #define MISO 0
@@ -73,6 +77,8 @@ void send(uint32_t dest_address, uint8_t data[], int data_size);
 float tofSensorDistance(uint8_t address);
 void calibrateTof();
 
+float calculateMedian(float[], int);
+
 volatile bool uwb_irq = true;
 uint16_t rx_len = 0;   
 uint32_t rx_finfo;
@@ -85,9 +91,13 @@ uint8_t rx_data[64];
 #define RADIUS 3.3825    // 3.3825cm radius of wheel (no tire)
 #define CLEARANCE 2      // how much below prev_distance current_distance needs to be to trigger a lock
 
+#define NUM_SAMPLES 10
+float sample_buffer[NUM_SAMPLES];
+int sample_count = 0;
+
 float current_distance;
 float prev_distance;
-int incrementing;
+bool incrementing;
 bool initial_reading = true;
 
 enum class STATES {INITIAL, SECOND, THIRD, VERIFY, FINISH};
@@ -115,8 +125,8 @@ void dwm3000_isr() {
 
 dwt_config_t config = {
   5,
-  DWT_PLEN_128,
-  DWT_PAC8,
+  DWT_PLEN_1024,
+  DWT_PAC32,
   9,
   9,
   1,
@@ -219,6 +229,9 @@ void setup() {
   }
   Serial.println("Success!");
 
+  dwt_setrxantennadelay(RX_ANT_DLY);
+  dwt_settxantennadelay(TX_ANT_DLY);
+
   uint32_t dev_id = dwt_readdevid();
   Serial.printf("Dev ID: 0x%X\n", dev_id);
   if (dev_id == DWM_ID) {
@@ -244,8 +257,6 @@ void loop() {
   if (uwb_irq) checkData();
 }
 
-float theta_steps;
-
 void checkData() {
   uwb_irq = false;
 
@@ -266,17 +277,18 @@ void checkData() {
 
       uint32_t address = (uint32_t) rx_data[0] | ((uint32_t) rx_data[1] << 8) | ((uint32_t) rx_data[2] << 16) | ((uint32_t) rx_data[3] << 24);
 
-      if (address = RECEIVER_ADDRESS) {
+      if (address == RECEIVER_ADDRESS) {
         //Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
 
         if (rx_data[4] == 0xFF) {
           STATE = STATES::FINISH;
         } else if (rx_data[4] == 0xAA) { // AA means auto mode started from transmitter so we need to go back to initial state
           STATE = STATES::INITIAL;
-          incrementing = 0;
+          incrementing = false;
           initial_reading = true;
           prev_distance = -1;
           current_distance = -1;
+          sample_count = 0;
 
           // Capture t2 IMMEDIATELY for the poll packet (0xAA)
           uint8_t ts2[5];
@@ -328,38 +340,70 @@ void checkData() {
               ((uint64_t) rx_data[12] << 16) | ((uint64_t) rx_data[13] << 24) |
               ((uint64_t) rx_data[14] << 32);
 
-          current_distance = calculateDistance();
+          sample_buffer[sample_count++] = calculateDistance();
 
-          moveSteppers(-TURN_STEPS, -TURN_STEPS);
+          // working test:
+          /*moveSteppers(-TURN_STEPS, -TURN_STEPS);
           delay(10);
 
           if (prev_distance != -1 && (current_distance - prev_distance > CLEARANCE)) {
             STATE = STATES::FINISH;
-          }
-
-          /*
-          if ((current_distance > prev_distance) && prev_distance != -1) {
-            incrementing++;
-          } else {
-            // if we were incrementing but now current_distance < max_distance
-            // it means our max distance was the previous one
-            if (incrementing >= 3 && (prev_distance - current_distance >= CLEARANCE)) {
-              //delay(500);
-              //moveSteppers(TURN_STEPS, -TURN_STEPS);
-              STATE = STATES::FINISH;
-            }
           }*/
 
-          if (STATE != STATES::FINISH) {
-            prev_distance = current_distance;
+          // proper code (still needs testing):
+          if (sample_count >= 10) {
+            sample_count = 0;
 
-            uint8_t data[1] = {0xAA};
-            send(TRANSMITTER_ADDRESS, data, 1);
+            current_distance = calculateMedian(sample_buffer, NUM_SAMPLES);
+
+            moveSteppers(-TURN_STEPS, TURN_STEPS);
+            delay(10);
+
+            if (prev_distance != -1 && (current_distance - prev_distance > CLEARANCE)) {
+              if (!incrementing) incrementing = true;
+            }
+
+            if (incrementing && (prev_distance - current_distance > CLEARANCE)) {
+              STATE = STATES::FINISH;
+            }
+
+            if (STATE != STATES::FINISH) {
+              uint8_t data[9];
+              uint8_t header = 0xAA;
+              uint32_t pkg1 = (uint32_t) prev_distance;
+              uint32_t pkg2 = (uint32_t) current_distance;
+
+              prev_distance = current_distance;
+
+              memcpy(&data[0], &header, 1);
+              memcpy(&data[1], &pkg1, 4);
+              memcpy(&data[5], &pkg2, 4);
+
+              send(TRANSMITTER_ADDRESS, data, 9);
+            } else {
+              uint8_t data[9];
+              uint8_t header = 0xFF;
+              uint32_t pkg1 = (uint32_t) prev_distance;
+              uint32_t pkg2 = (uint32_t) current_distance;
+
+              memcpy(&data[0], &header, 1);
+              memcpy(&data[1], &pkg1, 4);
+              memcpy(&data[5], &pkg2, 4);
+
+              send(TRANSMITTER_ADDRESS, data, 9);
+              
+              moveSteppers(TURN_STEPS, -TURN_STEPS);
+            }
           } else {
-            uint8_t data[1] = {0xFF};
-            send(TRANSMITTER_ADDRESS, data, 1);      
-            
-            moveSteppers(TURN_STEPS, TURN_STEPS);
+            if (STATE != STATES::FINISH) {
+              uint8_t data[1] = {0xAA};
+              send(TRANSMITTER_ADDRESS, data, 1);
+            } else {
+             uint8_t data[1] = {0xFF};
+              send(TRANSMITTER_ADDRESS, data, 1);
+              
+              moveSteppers(TURN_STEPS, -TURN_STEPS);
+            }
           }
         }
       }
@@ -379,6 +423,8 @@ void checkData() {
 }
 
 void respond(uint32_t dest_address) {
+  delay(2); // give the transmitter time to re-enable its receiver
+
   uint8_t data[1] = {0x03};
   send(dest_address, data, 1);
 
@@ -393,43 +439,25 @@ void respond(uint32_t dest_address) {
 float filtered_distance = 0;
 
 float calculateDistance() {
-  // Serial.printf("t1: %d\n", t1);
-  // Serial.printf("t2: %d\n", t2);
-  // Serial.printf("t3: %d\n", t3);
-  // Serial.printf("t4: %d\n", t4);
-  // Serial.printf("t5: %d\n", t5);
-  // Serial.printf("t6: %d\n", t6);
+  int64_t round_trip_d1 = (int64_t) ((t4 - t1) & 0xFFFFFFFFFF);
+  int64_t reply_d1 = (int64_t) ((t3 - t2) & 0xFFFFFFFFFF);
+  int64_t round_trip_d2 = (int64_t) ((t6 - t3) & 0xFFFFFFFFFF);
+  int64_t reply_d2 = (int64_t) ((t5 - t4) & 0xFFFFFFFFFF);
 
-  double round_trip_d1 = (double) ((t4 - t1) & 0xFFFFFFFFFF);
-  double reply_d1 = (double) ((t3 - t2) & 0xFFFFFFFFFF);
-  double round_trip_d2 = (double) ((t6 - t3) & 0xFFFFFFFFFF);
-  double reply_d2 = (double) ((t5 - t4) & 0xFFFFFFFFFF);
+  int64_t tof_num = (round_trip_d1 * round_trip_d2) - (reply_d1 * reply_d2);
+  int64_t tof_denom = (round_trip_d1 + round_trip_d2 + reply_d1 + reply_d2);
 
-  // Serial.printf("Round trip d1: %d\n", round_trip_d1);
-  // Serial.printf("Reply d1: %d\n", reply_d1);
-  // Serial.printf("Round trip d2: %d\n", round_trip_d2);
-  // Serial.printf("Reply d2: %d\n", reply_d2);
+  double tof = (double) tof_num / (double) tof_denom;
+  double tof_seconds = tof * 15.6500400641E-12;
 
-  double tof = ((round_trip_d1 * round_trip_d2) - (reply_d1 * reply_d2)) / (round_trip_d1 + round_trip_d2 + reply_d1 + reply_d2);
-  double tof_seconds = tof * 15.65E-12;
-  float distance = tof_seconds * 3E8 * 100; // distance in cm
-  distance += 15; // correct for measured offset
-
-  // Apply Exponential Moving Average (EMA) filter
-  // if (initial_reading) {
-  //   filtered_distance = distance;
-  //   initial_reading = false;
-  // } else {
-  //   float alpha = 0.3f; // Smoothing factor: 0.1 = very smooth/slow, 0.5 = twitchy/fast
-  //   filtered_distance = (alpha * distance) + ((1.0f - alpha) * filtered_distance);
-  // } 
-
+  float distance = tof_seconds * 299792458.0 * 100; // distance in cm
+ 
   return distance;
 }
 
 void send(uint32_t dest_address, uint8_t data[], int data_size) {
   // force idle
-  dwt_forcetrxoff(); 
+  dwt_forcetrxoff();
 
   // build packet
   uint8_t tx_packet[4 + data_size];
@@ -448,6 +476,7 @@ void send(uint32_t dest_address, uint8_t data[], int data_size) {
   // transmit packet
   if (dwt_starttx(DWT_START_TX_IMMEDIATE) != DWT_SUCCESS) {
     Serial.println("Could not respond");
+    return;
   }
 
   // wait until transmit finishes or times out
@@ -460,6 +489,42 @@ void send(uint32_t dest_address, uint8_t data[], int data_size) {
   }
 
   dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
+}
+
+float calculateMedian(float arr[], int n) {
+  // 1. Sort the 10 samples
+  float temp[n];
+  for (int i = 0; i < n; i++) temp[i] = arr[i];
+  
+  for (int i = 0; i < n - 1; i++) {
+    for (int j = 0; j < n - 1 - i; j++) {
+      if (temp[j] > temp[j+1]) {
+        float t = temp[j];
+        temp[j] = temp[j+1];
+        temp[j+1] = t;
+      }
+    }
+  }
+
+  // 2. Trim extremes: Drop the top 2 and bottom 2 outliers (for n = 10)
+  // This completely eliminates severe UWB multipath reflection spikes.
+  float sum = 0;
+  int count = 0;
+  for (int i = 2; i < n - 2; i++) {
+    sum += temp[i];
+    count++;
+  }
+  
+  float trimmed_avg = sum / count;
+
+  // 3. Optional: Apply a light EMA blend to smooth block-to-block jitter during stationary tests
+  if (current_distance == 0 || current_distance == -1 || initial_reading) {
+    initial_reading = false;
+    return trimmed_avg;
+  } else {
+    // 70% previous value, 30% new filtered block (adjust weights as needed)
+    return (0.7f * current_distance) + (0.3f * trimmed_avg);
+  }
 }
 
 float tofSensorDistance(uint8_t address) {
