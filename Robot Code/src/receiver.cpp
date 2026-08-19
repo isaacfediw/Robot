@@ -72,8 +72,10 @@ void resetDWM();
 void moveSteppers(int left_steps, int right_steps);
 void checkData();
 float calculateDistance();
-void respond(uint32_t dest_address);
-void send(uint32_t dest_address, uint8_t data[], int data_size);
+bool respond(uint32_t dest_address);
+bool send(uint32_t dest_address, uint8_t data[], int data_size);
+void transmitCleanup(uint32_t);
+
 float tofSensorDistance(uint8_t address);
 void calibrateTof();
 
@@ -133,7 +135,7 @@ dwt_config_t config = {
   DWT_BR_6M8,
   DWT_PHRMODE_STD,
   DWT_PHRRATE_STD,
-  129,
+  1033,
   DWT_STS_MODE_OFF,
   DWT_STS_LEN_64,
   DWT_PDOA_M0
@@ -258,12 +260,16 @@ void loop() {
 }
 
 void checkData() {
+  Serial.println("Checking data");
+
   uwb_irq = false;
 
   delayMicroseconds(10);
   uint32_t status = dwt_read32bitreg(SYS_STATUS_ID);
 
   if (status & SYS_STATUS_RXFCG_BIT_MASK) {
+    Serial.println("Status good");
+
     rx_finfo = dwt_read32bitreg(RX_FINFO_ID);
     rx_len = (uint16_t) (rx_finfo & RX_FINFO_RXFLEN_BIT_MASK); // frame length is stored within the least significant 10 bits
     rx_len -=2; // removes the CRC bytes from the length
@@ -277,12 +283,18 @@ void checkData() {
 
       uint32_t address = (uint32_t) rx_data[0] | ((uint32_t) rx_data[1] << 8) | ((uint32_t) rx_data[2] << 16) | ((uint32_t) rx_data[3] << 24);
 
+      Serial.printf("rx_len = %d\n", rx_len);
+      Serial.printf("address = 0x%X\n", address);
+
       if (address == RECEIVER_ADDRESS) {
         //Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
 
         if (rx_data[4] == 0xFF) {
+          Serial.println("Received 0xFF");
           STATE = STATES::FINISH;
         } else if (rx_data[4] == 0xAA) { // AA means auto mode started from transmitter so we need to go back to initial state
+          Serial.println("Received 0xAA");
+         
           STATE = STATES::INITIAL;
           incrementing = false;
           initial_reading = true;
@@ -300,8 +312,11 @@ void checkData() {
           ((uint64_t) ts2[4] << 32);
 
           // respond and capture t3
-          respond(TRANSMITTER_ADDRESS);
+          bool responded = respond(TRANSMITTER_ADDRESS);
+          if (!responded) Serial.println("Didn't respond (After 0xAA)");
         } else if (rx_data[4] == 0xA0) { // A0 means another request was recieved at the transmitter so we want to keep the state as is
+          Serial.println("Received 0xA0");
+          
           // Capture t2 IMMEDIATELY for the poll packet (0xA0)
           uint8_t ts2[5];
 
@@ -312,13 +327,16 @@ void checkData() {
           ((uint64_t) ts2[4] << 32);
 
           // respond and capture t3
-          respond(TRANSMITTER_ADDRESS);
+          bool responded = respond(TRANSMITTER_ADDRESS);
+          if (!responded) Serial.println("Didn't respond (After 0xA0)");
         } else if (rx_len == 10) { // this means a timestamp was sent (timestamp is 5 bytes)
           uint64_t ts = (uint64_t) rx_data[5] | ((uint64_t) rx_data[6] << 8) |
           ((uint64_t) rx_data[7] << 16) | ((uint64_t) rx_data[8] << 24) |
           ((uint64_t) rx_data[9] << 32);
 
           if (rx_data[4] == 0x04) {
+            Serial.println("Received 0x04");
+
             // load timestamp value into t4, 0x04 means it is t4 that is being sent
             t4 = ts;
 
@@ -331,6 +349,8 @@ void checkData() {
                 ((uint64_t) ts6[4] << 32);
           }
         } else if (rx_len == 15 && rx_data[4] == 0x15) { // two timestamps sent (t1 and t5)
+          Serial.println("Received 0x15");
+          
           // now that we have the final two timestamps we can calculate the distance
           t1 = (uint64_t)  rx_data[5] | ((uint64_t) rx_data[6] << 8) |
               ((uint64_t) rx_data[7] << 16) | ((uint64_t) rx_data[8] << 24) |
@@ -340,23 +360,46 @@ void checkData() {
               ((uint64_t) rx_data[12] << 16) | ((uint64_t) rx_data[13] << 24) |
               ((uint64_t) rx_data[14] << 32);
 
-          sample_buffer[sample_count++] = calculateDistance();
+          //sample_buffer[sample_count++] = calculateDistance();
+          //current_distance = calculateDistance();
 
           // working test:
-          /*moveSteppers(-TURN_STEPS, -TURN_STEPS);
-          delay(10);
+          //moveSteppers(-TURN_STEPS, -TURN_STEPS);
+          //delay(10);
 
-          if (prev_distance != -1 && (current_distance - prev_distance > CLEARANCE)) {
+          /*if (prev_distance != -1 && (current_distance - prev_distance > CLEARANCE)) {
             STATE = STATES::FINISH;
+            Serial.println("State = Finish");
           }*/
 
+          if (STATE != STATES::FINISH) {
+            //prev_distance = current_distance;
+
+            uint8_t data[1] = {0xAA};
+
+            bool sent = send(TRANSMITTER_ADDRESS, data, 1);
+
+            while (!sent) {
+              transmitCleanup(status);
+              sent = send(TRANSMITTER_ADDRESS, data, 1);
+            }
+
+            Serial.println("Sent 0xAA");
+          } else {
+            Serial.println("Sending 0xFF");
+            uint8_t data[1] = {0xFF};
+            send(TRANSMITTER_ADDRESS, data, 1);      
+            
+            //moveSteppers(TURN_STEPS, TURN_STEPS);
+          }
+
           // proper code (still needs testing):
-          if (sample_count >= 10) {
+          /*if (sample_count >= 10) {
             sample_count = 0;
 
             current_distance = calculateMedian(sample_buffer, NUM_SAMPLES);
 
-            moveSteppers(-TURN_STEPS, TURN_STEPS);
+            //moveSteppers(-TURN_STEPS, TURN_STEPS);
             delay(10);
 
             if (prev_distance != -1 && (current_distance - prev_distance > CLEARANCE)) {
@@ -392,7 +435,7 @@ void checkData() {
 
               send(TRANSMITTER_ADDRESS, data, 9);
               
-              moveSteppers(TURN_STEPS, -TURN_STEPS);
+              //moveSteppers(TURN_STEPS, -TURN_STEPS);
             }
           } else {
             if (STATE != STATES::FINISH) {
@@ -402,9 +445,9 @@ void checkData() {
              uint8_t data[1] = {0xFF};
               send(TRANSMITTER_ADDRESS, data, 1);
               
-              moveSteppers(TURN_STEPS, -TURN_STEPS);
+              //moveSteppers(TURN_STEPS, -TURN_STEPS);
             }
-          }
+          }*/
         }
       }
     }
@@ -412,21 +455,14 @@ void checkData() {
     dwt_forcetrxoff();
   }
 
-  dwt_write32bitreg(SYS_STATUS_ID, status); // clear all status bits
-
-  uint32_t leftover_status = dwt_read32bitreg(SYS_STATUS_ID);
-  if (leftover_status) {
-    dwt_write32bitreg(SYS_STATUS_ID, leftover_status);
-  }
-
-  dwt_rxenable(DWT_START_RX_IMMEDIATE);
+  transmitCleanup(status);
 }
 
-void respond(uint32_t dest_address) {
+bool respond(uint32_t dest_address) {
   delay(2); // give the transmitter time to re-enable its receiver
 
   uint8_t data[1] = {0x03};
-  send(dest_address, data, 1);
+  if (!send(dest_address, data, 1)) return false;
 
   uint8_t ts3[5];
   dwt_readtxtimestamp(ts3);
@@ -434,6 +470,8 @@ void respond(uint32_t dest_address) {
   t3 = (uint64_t)  ts3[0] | ((uint64_t) ts3[1] << 8) |
        ((uint64_t) ts3[2] << 16) | ((uint64_t) ts3[3] << 24) |
        ((uint64_t) ts3[4] << 32);
+
+  return true;
 }
 
 float filtered_distance = 0;
@@ -455,7 +493,8 @@ float calculateDistance() {
   return distance;
 }
 
-void send(uint32_t dest_address, uint8_t data[], int data_size) {
+
+bool send(uint32_t dest_address, uint8_t data[], int data_size) {
   // force idle
   dwt_forcetrxoff();
 
@@ -475,20 +514,33 @@ void send(uint32_t dest_address, uint8_t data[], int data_size) {
   
   // transmit packet
   if (dwt_starttx(DWT_START_TX_IMMEDIATE) != DWT_SUCCESS) {
-    Serial.println("Could not respond");
-    return;
+    return false;
   }
 
   // wait until transmit finishes or times out
   uint32_t start_ms = millis();
   while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK)) {
      if (millis() - start_ms > 100) {
-      Serial.println("TX Timeout");
-      break;
+      return false;
      }
   }
 
   dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
+
+  return true;
+}
+
+void transmitCleanup(uint32_t status) {
+  delay(2);
+
+  dwt_write32bitreg(SYS_STATUS_ID, status); // clear all status bits
+
+  uint32_t leftover_status = dwt_read32bitreg(SYS_STATUS_ID);
+  if (leftover_status) {
+    dwt_write32bitreg(SYS_STATUS_ID, leftover_status);
+  }
+
+  dwt_rxenable(DWT_START_RX_IMMEDIATE);
 }
 
 float calculateMedian(float arr[], int n) {

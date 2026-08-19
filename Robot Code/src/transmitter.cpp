@@ -37,10 +37,10 @@
 
 void printDWMDiagnostics();
 void resetDWM();
-void send(uint32_t dest_address, uint8_t data[], int data_size);
+bool send(uint32_t dest_address, uint8_t data[], int data_size);
 void initiate(uint8_t command);
 void checkData();
-void respond(uint32_t dest_address);
+bool respond(uint32_t dest_address);
 
 bool initiated = false;
 volatile bool uwb_irq = false;
@@ -66,7 +66,7 @@ dwt_config_t config = {
   DWT_BR_6M8,
   DWT_PHRMODE_STD,
   DWT_PHRRATE_STD,
-  129,
+  1033,
   DWT_STS_MODE_OFF,
   DWT_STS_LEN_64,
   DWT_PDOA_M0
@@ -158,7 +158,7 @@ bool watchdog_active = false;
 
 void loop() {
   if (!digitalRead(AUTO) && initiated) {
-    Serial.println("Sending 0xFF");
+    Serial.println("Sending 0xFF (Button Press)");
     initiate(0xFF);
     dwt_rxenable(DWT_START_RX_IMMEDIATE);
 
@@ -250,8 +250,11 @@ void checkData() {
             Serial.printf("Current distance: %d\n", current_distance);
           }
           
+          Serial.println("Sending 0xA0");
           initiate(0xA0);
         } else if (rx_data[4] == 0x03) {
+          Serial.println("Received 0x03");
+
           // gather timestamp 4
           uint8_t ts4[5];
           dwt_readrxtimestamp(ts4);
@@ -260,7 +263,14 @@ void checkData() {
           ((uint64_t) ts4[2] << 16) | ((uint64_t) ts4[3] << 24) |
           ((uint64_t) ts4[4] << 32);
       
-          respond(RECEIVER_ADDRESS);
+          if (!respond(RECEIVER_ADDRESS)) {
+            Serial.println("Sending 0xFF (Failed to Respond)");
+            initiate(0xFF);
+            dwt_rxenable(DWT_START_RX_IMMEDIATE);
+
+            initiated = false;
+            watchdog_active = false; // Turn off watchdog when stopped
+          }
         }
       }
     }
@@ -281,9 +291,13 @@ void checkData() {
 void initiate(uint8_t command) {
   initiated = true;
 
+  delay(4); // give the receiver time to re-enable its receiver
+
   // build the auto mode packet
   uint8_t tx_packet1[1] = {command};
-  send(RECEIVER_ADDRESS, tx_packet1, 1);
+  bool sent = send(RECEIVER_ADDRESS, tx_packet1, 1);
+
+  Serial.printf("Success: %d\n", sent);
 
   // read the 1st timestamp
   uint8_t ts1[5];
@@ -294,15 +308,17 @@ void initiate(uint8_t command) {
        ((uint64_t) ts1[4] << 32);
 }
 
-void respond(uint32_t dest_address) {
-  delay(2); // give the receiver time to re-enable its receiver
+bool respond(uint32_t dest_address) {
+  delay(4); // give the receiver time to re-enable its receiver
 
   // build the t4 packet
   uint8_t tx_packet[6];
   tx_packet[0] = 0x04; // Byte 4: Indicate t4
   memcpy(&tx_packet[1], &t4, 5); // Bytes 5-9: Timestamp
 
-  send(dest_address, tx_packet, 6);
+  if (!send(dest_address, tx_packet, 6)) return false;
+
+  Serial.println("Sent 0x04");
 
   // capture timestamp 5
   uint8_t ts5[5];
@@ -312,17 +328,21 @@ void respond(uint32_t dest_address) {
        ((uint64_t) ts5[2] << 16) | ((uint64_t) ts5[3] << 24) |
        ((uint64_t) ts5[4] << 32);
 
-  delay(3);
+  delay(4);
 
   uint8_t tx_packet2[11];
   tx_packet2[0] = 0x15; // Byte 4: Indicate t1 and t5
   memcpy(&tx_packet2[1], &t1, 5); // Bytes 5-9: Timestamp 1
   memcpy(&tx_packet2[6], &t5, 5); // Bytes 10-14: Timestamp 
 
-  send(dest_address, tx_packet2, 11);
+  if (!send(dest_address, tx_packet2, 11)) return false;
+
+  Serial.println("Sent 0x15");
+
+  return true;
 }
 
-void send(uint32_t dest_address, uint8_t data[], int data_size) {
+bool send(uint32_t dest_address, uint8_t data[], int data_size) {
   // force idle
   dwt_forcetrxoff(); 
 
@@ -342,20 +362,20 @@ void send(uint32_t dest_address, uint8_t data[], int data_size) {
   
   // transmit packet
   if (dwt_starttx(DWT_START_TX_IMMEDIATE) != DWT_SUCCESS) {
-    Serial.println("Could not respond");
-    return;
+    return false;
   }
 
   // wait until transmit finishes or times out
   uint32_t start_ms = millis();
   while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK)) {
      if (millis() - start_ms > 100) {
-      Serial.println("TX Timeout");
-      break;
+      return false;
      }
   }
 
   dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
+
+  return true;
 }
 
 void resetDWM() {
