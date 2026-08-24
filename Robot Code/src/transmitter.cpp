@@ -1,11 +1,22 @@
 #include <Arduino.h>
 #include <SPI.h>
+#include <Adafruit_NeoPixel.h>
 
 #include "dw3000.h"
 
+extern "C" {
+    void dwt_readsystime(uint8_t *timestamp);
+}
+
+
+// define statements
+// on board led
+#define ON_BOARD_LED 16
+#define NUM_PIXELS   1
+
 // dwm3000 definitions
-#define PIN_IRQ  6
-#define PIN_RST  7
+#define PIN_IRQ 6
+#define PIN_RST 7
 #define PIN_WAKE 8
 
 #define DWM_ID 0xDECA0302
@@ -13,386 +24,313 @@
 #define RECEIVER_ADDRESS    0x00000001
 #define TRANSMITTER_ADDRESS 0x00000002
 
-// typical default antenna delays for the DWM3000
 #define TX_ANT_DLY 16385
 #define RX_ANT_DLY 16385
+
+#define POLL_TX_TO_RESP_RX_DLY_UUS 600
+#define RESP_RX_TIMEOUT_UUS 400
 
 // spi definitions
 #define SCK  2
 #define MISO 0
 #define MOSI 3
 #define CS   1
-#define SPI_CLK_SPEED 2000000 // 2MHz
-// DWM3000 Recieves Data MSB First
+#define SPI_CLK_SPEED 2000000
 
-#define READ_DUMMY 0x00
+#define AUTO 13
 
-// joystick definitions
-#define JOY_Y  29
-#define JOY_X  28
-#define JOY_SW 27 // give this an internal pull-up resistor
 
-// auto mode toggle
-#define AUTO 13 // give this an internal pull-down resistor
-
-void printDWMDiagnostics();
+// function definitions
 void resetDWM();
-bool send(uint32_t dest_address, uint8_t data[], int data_size);
-void initiate(uint8_t command);
 void checkData();
-bool respond(uint32_t dest_address);
+bool send(uint32_t dest_address, uint8_t  data[], int data_size, bool expect_response = true);
+
+
+// global variables
+uint64_t t1;
+uint64_t t4;
+uint64_t t5;
 
 bool initiated = false;
 volatile bool uwb_irq = false;
-uint16_t rx_len = 0;   
-uint32_t rx_finfo;
-uint8_t rx_data[64];
 
-uint64_t t1; // timestamp when transmitter sent frame
-uint64_t t4; // timestamp when transmitter recieved response
-uint64_t t5; // timestamp when transmitted sends second frame
+Adafruit_NeoPixel pixel(NUM_PIXELS, ON_BOARD_LED, NEO_GRB + NEO_KHZ800);
 
+extern dwt_txconfig_t txconfig_options;
+
+dwt_config_t config =  {
+    5,
+    DWT_PLEN_1024,
+    DWT_PAC32,
+    9,
+    9,
+    1,
+    DWT_BR_6M8,
+    DWT_PHRMODE_STD,
+    DWT_PHRRATE_STD,
+    (1025 + 8 - 32),
+    DWT_STS_MODE_OFF,
+    DWT_STS_LEN_64,
+    DWT_PDOA_M0
+};
+
+
+// function definitions
 void dwm3000_isr() {
   uwb_irq = true;
 }
 
-dwt_config_t config = {
-  5,
-  DWT_PLEN_1024,
-  DWT_PAC32,
-  9,
-  9,
-  1,
-  DWT_BR_6M8,
-  DWT_PHRMODE_STD,
-  DWT_PHRRATE_STD,
-  1033,
-  DWT_STS_MODE_OFF,
-  DWT_STS_LEN_64,
-  DWT_PDOA_M0
-};
-
 void setup() {
-  Serial.begin(115200);
+    // serial monitor initialization
+    Serial.begin(115200);
 
-  uint32_t t = millis();
-  while (!Serial && (millis() - t < 3000)); // wait for serial to connect, but if it takes more than 3s continue anyways
+    uint32_t start = millis();
+    while (!Serial && (millis() - start < 3000));
 
-  pinMode(JOY_X, INPUT);
-  pinMode(JOY_Y, INPUT);
-  pinMode(JOY_SW, INPUT_PULLUP);
+    // spi initialization
+    SPI.setSCK(SCK);
+    SPI.setTX(MOSI);
+    SPI.setRX(MISO);
 
-  pinMode(AUTO, INPUT_PULLDOWN);
-  
-  // spi initialization
-  SPI.setSCK(SCK); 
-  SPI.setTX(MOSI);
-  SPI.setRX(MISO);
-  pinMode(CS, OUTPUT);
-  digitalWrite(CS, HIGH);
+    pinMode(CS, OUTPUT);
+    digitalWrite(CS, HIGH);
 
-  // DWM3000 initialization
-  Serial.println("Beginning DWM3000 Initialization");
+    // auto button initialization
+    pinMode(AUTO, INPUT_PULLDOWN);
 
-  resetDWM();
+    // neo-pixel initialization
+    pixel.begin();
 
-  spiBegin(PIN_IRQ, PIN_RST);
-  spiSelect(CS);
+    // dwm3000 initialization
+    resetDWM();
 
-  delay(200); // needed for stable power up
+    spiBegin(PIN_IRQ, PIN_RST); 
+    spiSelect(CS);
 
-  Serial.print("Waiting for IDLE_RC...");
-  while (!dwt_checkidlerc()) {
-    Serial.print(".");
-    delay(10);
-  }
-  Serial.println(" Done");
+    delay(2);
+    
+    dwt_softreset();
+    delay(2);
 
-  Serial.print("Performing soft reset...");
-  dwt_softreset();
-  delay(100);
-  while (!dwt_checkidlerc()) {
-    Serial.print("x");
-    delay(10);
-  }
-  Serial.println(" Done");
-  
-  Serial.print("Initializing API... ");
-  if (dwt_initialise(DWT_DW_INIT) == DWT_ERROR) {
-    Serial.println("Failed!");
-    while (1);
-  }
-  Serial.println("Success!");
+    while(!dwt_checkidlerc()) delay(10);
 
-  Serial.print("Configuring PHY/MAC... ");
-  if (dwt_configure(&config) == DWT_ERROR) {
-    Serial.println("Failed!");
-    while (1);
-  }
-  Serial.println("Success!");
+    if (dwt_initialise(DWT_DW_INIT) == DWT_ERROR) {
+        Serial.println("Could not initialize API");
+        while (1);
+    }
 
-  dwt_setrxantennadelay(RX_ANT_DLY);
-  dwt_settxantennadelay(TX_ANT_DLY);
+    if (dwt_configure(&config) == DWT_ERROR) {
+        Serial.println("Could not configure device");
+        while (1);
+    }
 
-  uint32_t dev_id = dwt_readdevid();
-  Serial.printf("Dev ID: 0x%X\n", dev_id);
-  if (dev_id == DWM_ID) {
-    Serial.println("DWM3000 is online and ready");
-  } else {
-    Serial.println("Unrecognized device ID");
-  }
-  // End DWM3000 Initialization
+    uint32_t dev_id = dwt_readdevid();
+    if (dev_id != DWM_ID) {
+        Serial.println("Incorrect device ID");
+        while (1);
+    }
 
-  // setup interrupts
-  dwt_setinterrupt(DWT_INT_RX | DWT_INT_TFRS, 0, DWT_ENABLE_INT_ONLY);
-  // note that the pin_irq is already set up as an input in spiBegin()
-  attachInterrupt(digitalPinToInterrupt(PIN_IRQ), dwm3000_isr, RISING);
+    dwt_configuretxrf(&txconfig_options);
 
-  dwt_rxenable(DWT_START_RX_IMMEDIATE);
+    dwt_setrxantennadelay(RX_ANT_DLY);
+    dwt_settxantennadelay(TX_ANT_DLY);
 
-  printDWMDiagnostics();
+    dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
+
+    // setup interrupts
+    dwt_setinterrupt(DWT_INT_RX, 0, DWT_ENABLE_INT_ONLY);
+
+    // note that the pin_irq is already set up as an input in spiBegin()
+    attachInterrupt(digitalPinToInterrupt(PIN_IRQ), dwm3000_isr, RISING);
+
+    Serial.println("All initialization complete (transmitter)");
 }
 
-uint32_t last_packet_time = 0;
-bool watchdog_active = false;
-
 void loop() {
-  if (!digitalRead(AUTO) && initiated) {
-    Serial.println("Sending 0xFF (Button Press)");
-    initiate(0xFF);
-    dwt_rxenable(DWT_START_RX_IMMEDIATE);
+    if (!digitalRead(AUTO) && initiated) {
+        uint8_t data[1] = {0xFF};
+        send(RECEIVER_ADDRESS, data, 1, false);
 
-    initiated = false;
-    watchdog_active = false; // Turn off watchdog when stopped
-  } else if (digitalRead(AUTO) && !initiated) {
-    uwb_irq = false;
-    rx_len = 0;   
-    rx_finfo = 0;
+        pixel.setPixelColor(0, pixel.Color(0, 0, 0));
+        pixel.show();
 
-    t1 = 0;
-    t4 = 0;
-    t5 = 0;
+        initiated = false;
+    } else if (digitalRead(AUTO) && !initiated) {
+        uint8_t data[1] = {0xAA};
+        if (send(RECEIVER_ADDRESS, data, 1)) {
+            initiated = true;
 
-    Serial.println("Sending Auto Mode");
-    
-    initiate(0xAA);
-    dwt_rxenable(DWT_START_RX_IMMEDIATE);
+            // capture t1
+            uint8_t ts1[5];
+            dwt_readtxtimestamp(ts1);
+            memcpy(&t1, &ts1[0], 5);
 
-    // Start tracking inactivity when auto mode begins
-    last_packet_time = millis();
-    watchdog_active = true;
-  }
+            //Serial.println("Sent 0xAA");
+        } else {
+            //Serial.println("Failed to send 0xAA");
+        }
+    }
 
-  // poll for interrupts
-  if (uwb_irq) {
-    last_packet_time = millis();
-    checkData();
-  }
-
-  // ---> INACTIVITY WATCHDOG TIMER <---
-  // If Auto mode is supposed to be running, but we haven't heard a single 
-  // packet from the receiver in 5 full seconds, something has frozen.
-  if (watchdog_active && (millis() - last_packet_time > 5000)) {
-    Serial.println("[DIAGNOSTIC] Connection lost! Receiver stopped communicating mid-run.");
-    watchdog_active = false; // Stop spamming the message
-    initiate(0xA0);
-    dwt_rxenable(DWT_START_RX_IMMEDIATE);
-
-    last_packet_time = millis();
-    watchdog_active = true;
-  }
+    if (digitalRead(AUTO) && uwb_irq && initiated) checkData();
 }
 
 void checkData() {
-  uwb_irq = false;
+    uwb_irq = false;
 
-  delayMicroseconds(10);
-  uint32_t status = dwt_read32bitreg(SYS_STATUS_ID);
+    //Serial.println("Checking Data");
 
-  if (status & SYS_STATUS_RXFCG_BIT_MASK) {
-    rx_finfo = dwt_read32bitreg(RX_FINFO_ID);
-    rx_len = (uint16_t) (rx_finfo & RX_FINFO_RXFLEN_BIT_MASK); // frame length is stored within the least significant 10 bits
-    rx_len -=2; // removes the CRC bytes from the length
+    uint32_t status = dwt_read32bitreg(SYS_STATUS_ID);
 
-    if (rx_len > 64) {
-      Serial.printf("[ERROR] rx length of %d is too long (max 64)\n", rx_len);
-    } else if (rx_len < 5) { // must be at least 5 if it sent the 4 byte address and a message
-      Serial.printf("[ERROR] rx length of %d is too short (min 5)\n", rx_len);
-    } else {
-      dwt_readrxdata(rx_data, rx_len, 0);
-
-      uint32_t address = (uint32_t) rx_data[0] | ((uint32_t) rx_data[1] << 8) | ((uint32_t) rx_data[2] << 16) | ((uint32_t) rx_data[3] << 24);
-
-      if (address == TRANSMITTER_ADDRESS) {
-        //Serial.printf("rx_data[4] = 0x%X\n", rx_data[4]);
-
-        if (rx_data[4] == 0xFF) {
-          dwt_rxenable(DWT_START_RX_IMMEDIATE);
-
-          watchdog_active = false; // Turn off watchdog when stopped
-
-          uint32_t prev_distance, current_distance;
-          memcpy(&prev_distance, &rx_data[5], 4);
-          memcpy(&current_distance, &rx_data[9], 4);
-
-          Serial.printf("Previous distance: %d, ", prev_distance);
-          Serial.printf("Current distance: %d\n", current_distance);
-
-          Serial.printf("Finished\n");
-        } else if (rx_data[4] == 0xAA && digitalRead(AUTO)) { // if the receiver sends AA it means it is requesting we do the "initial" sequence again
-          uint32_t prev_distance, current_distance;
-
-          if (rx_len == 13) {
-            memcpy(&prev_distance, &rx_data[5], 4);
-            memcpy(&current_distance, &rx_data[9], 4);
-
-            Serial.printf("Previous distance: %d, ", prev_distance);
-            Serial.printf("Current distance: %d\n", current_distance);
-          }
-          
-          Serial.println("Sending 0xA0");
-          initiate(0xA0);
-        } else if (rx_data[4] == 0x03) {
-          Serial.println("Received 0x03");
-
-          // gather timestamp 4
-          uint8_t ts4[5];
-          dwt_readrxtimestamp(ts4);
-
-          t4 = (uint64_t) ts4[0] | ((uint64_t) ts4[1] << 8) |
-          ((uint64_t) ts4[2] << 16) | ((uint64_t) ts4[3] << 24) |
-          ((uint64_t) ts4[4] << 32);
-      
-          if (!respond(RECEIVER_ADDRESS)) {
-            Serial.println("Sending 0xFF (Failed to Respond)");
-            initiate(0xFF);
-            dwt_rxenable(DWT_START_RX_IMMEDIATE);
-
-            initiated = false;
-            watchdog_active = false; // Turn off watchdog when stopped
-          }
-        }
-      }
+    if (!(status & SYS_STATUS_RXFCG_BIT_MASK)) {
+        dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_ALL_RX_TO | SYS_STATUS_ALL_RX_ERR);
+        dwt_rxenable(DWT_START_RX_IMMEDIATE);
+        return;
     }
-  } else if (status & (SYS_STATUS_RXFCE_BIT_MASK | SYS_STATUS_RXFSL_BIT_MASK | SYS_STATUS_RXFTO_BIT_MASK | SYS_STATUS_RXOVRR_BIT_MASK)) {
-    dwt_forcetrxoff();
-  }
 
-  dwt_write32bitreg(SYS_STATUS_ID, status); // clear all status bits
+    dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_RXFCG_BIT_MASK);
 
-  uint32_t leftover_status = dwt_read32bitreg(SYS_STATUS_ID);
-  if (leftover_status) {
-    dwt_write32bitreg(SYS_STATUS_ID, leftover_status);
-  }
+    uint32_t rx_finfo = dwt_read32bitreg(RX_FINFO_ID);
+    uint16_t rx_len = (uint16_t) (rx_finfo & RX_FINFO_RXFLEN_BIT_MASK) - 2;
 
-  dwt_rxenable(DWT_START_RX_IMMEDIATE);
+    if (rx_len < 5 || rx_len > 64) {
+        dwt_rxenable(DWT_START_RX_IMMEDIATE);
+        return;
+    }
+    
+    uint8_t rx_data[64];
+    dwt_readrxdata(rx_data, rx_len, 0);
+
+    uint32_t address;
+    memcpy(&address, &rx_data[0], 4);
+
+    if (address != TRANSMITTER_ADDRESS) {
+        //Serial.printf("Address is not that of the transmitter");
+        dwt_rxenable(DWT_START_RX_IMMEDIATE);
+        return;
+    }
+    
+    uint8_t data[1];
+    uint32_t sys_time, delayed_time;
+    uint32_t dest_address;
+
+    switch (rx_data[4]) {
+        case 0xAA:
+            //Serial.println("Received 0xAA");
+
+            pixel.setPixelColor(0, pixel.Color(0, 0, 255));
+            pixel.show();
+
+            data[0] = 0xA0;
+            
+            if (!send(RECEIVER_ADDRESS, data, 1)) {
+                //Serial.println("Failed to send 0xA0");
+                dwt_rxenable(DWT_START_RX_IMMEDIATE);
+                return;
+            }
+
+            // capture t1
+            uint8_t ts1[5];
+            dwt_readtxtimestamp(ts1);
+            memcpy(&t1, &ts1[0], 5);
+
+            break;
+        case 0x03:
+            // capture t4 and respond
+            uint8_t ts4[5];
+            dwt_readrxtimestamp(ts4);
+            memcpy(&t4, &ts4[0], 5);
+
+            //Serial.println("Received 0x03");
+
+            // capture t5 and respond with t1 t4 and t5
+            dwt_readsystime((uint8_t*) &sys_time);
+        
+            delayed_time = sys_time + (uint32_t) (((uint64_t) UUS_TO_DWT_TIME * (2000)) >> 8); // shift right by 8 to convert to 4ns time
+
+            dwt_setdelayedtrxtime(delayed_time);
+            
+            t5 = ((uint64_t) delayed_time) << 8;
+
+            uint8_t final_payload[16];
+            final_payload[0] = 0x15;
+            memcpy(&final_payload[1], &t1, 5);
+            memcpy(&final_payload[6], &t4, 5);
+            memcpy(&final_payload[11], &t5, 5);
+
+            uint8_t tx_packet[4 + sizeof(final_payload)];
+            dest_address = RECEIVER_ADDRESS;
+            memcpy(&tx_packet[0], &dest_address, 4);
+            memcpy(&tx_packet[4], final_payload, sizeof(final_payload));
+
+            dwt_writetxdata(sizeof(tx_packet), tx_packet, 0);
+            dwt_writetxfctrl(sizeof(tx_packet) + 2, 0, 0);
+
+            if (dwt_starttx(DWT_START_TX_DELAYED | DWT_RESPONSE_EXPECTED) != DWT_SUCCESS) {
+                //Serial.println("Delayed TX failed (timing window missed)");
+                dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
+                dwt_rxenable(DWT_START_RX_IMMEDIATE);
+                return;
+            }
+
+            while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK));
+
+            delayMicroseconds(2);
+            dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
+
+            //Serial.println("Sent t1, t4, t5");
+
+            break;
+        default:
+            //Serial.println("Did not get a header matching any valid options");
+            dwt_rxenable(DWT_START_RX_IMMEDIATE);
+    }
 }
 
-void initiate(uint8_t command) {
-  initiated = true;
+bool send(uint32_t dest_address, uint8_t data[], int data_size, bool expect_response) {
+    dwt_forcetrxoff(); // force into idle state. this is to prevent attempted transmitting while the receiver is enabled
 
-  delay(4); // give the receiver time to re-enable its receiver
+    uint8_t tx_packet[4 + data_size];
+    memcpy(&tx_packet[0], &dest_address, 4);
 
-  // build the auto mode packet
-  uint8_t tx_packet1[1] = {command};
-  bool sent = send(RECEIVER_ADDRESS, tx_packet1, 1);
+    for (int i = 0; i < data_size; i++) {
+        tx_packet[4 + i] = data[i];
+    }
 
-  Serial.printf("Success: %d\n", sent);
+    dwt_writetxdata(sizeof(tx_packet), tx_packet, 0);
+    dwt_writetxfctrl(sizeof(tx_packet) + 2, 0, 0);
 
-  // read the 1st timestamp
-  uint8_t ts1[5];
-  dwt_readtxtimestamp(ts1);
+    bool complete;
+    if (expect_response) complete = dwt_starttx(DWT_START_TX_IMMEDIATE | DWT_RESPONSE_EXPECTED) == DWT_SUCCESS;
+    else complete = dwt_starttx(DWT_START_TX_IMMEDIATE) == DWT_SUCCESS;
 
-  t1 = (uint64_t)  ts1[0] | ((uint64_t) ts1[1] << 8) |
-       ((uint64_t) ts1[2] << 16) | ((uint64_t) ts1[3] << 24) |
-       ((uint64_t) ts1[4] << 32);
-}
+    while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK));
 
-bool respond(uint32_t dest_address) {
-  delay(4); // give the receiver time to re-enable its receiver
-
-  // build the t4 packet
-  uint8_t tx_packet[6];
-  tx_packet[0] = 0x04; // Byte 4: Indicate t4
-  memcpy(&tx_packet[1], &t4, 5); // Bytes 5-9: Timestamp
-
-  if (!send(dest_address, tx_packet, 6)) return false;
-
-  Serial.println("Sent 0x04");
-
-  // capture timestamp 5
-  uint8_t ts5[5];
-  dwt_readtxtimestamp(ts5);
-
-  t5 = (uint64_t)  ts5[0] | ((uint64_t) ts5[1] << 8) |
-       ((uint64_t) ts5[2] << 16) | ((uint64_t) ts5[3] << 24) |
-       ((uint64_t) ts5[4] << 32);
-
-  delay(4);
-
-  uint8_t tx_packet2[11];
-  tx_packet2[0] = 0x15; // Byte 4: Indicate t1 and t5
-  memcpy(&tx_packet2[1], &t1, 5); // Bytes 5-9: Timestamp 1
-  memcpy(&tx_packet2[6], &t5, 5); // Bytes 10-14: Timestamp 
-
-  if (!send(dest_address, tx_packet2, 11)) return false;
-
-  Serial.println("Sent 0x15");
-
-  return true;
-}
-
-bool send(uint32_t dest_address, uint8_t data[], int data_size) {
-  // force idle
-  dwt_forcetrxoff(); 
-
-  // build packet
-  uint8_t tx_packet[4 + data_size];
-  memcpy(&tx_packet[0], &dest_address, 4);
-
-  //Serial.printf("data[0] = 0x%X\n", data[0]);
-
-  for (int i = 0; i < data_size; i++) {
-    tx_packet[4 + i] = data[i];
-  }
-
-  // write packet
-  dwt_writetxdata(sizeof(tx_packet), tx_packet, 0);
-  dwt_writetxfctrl(sizeof(tx_packet) + 2, 0, 0);
-  
-  // transmit packet
-  if (dwt_starttx(DWT_START_TX_IMMEDIATE) != DWT_SUCCESS) {
-    return false;
-  }
-
-  // wait until transmit finishes or times out
-  uint32_t start_ms = millis();
-  while (!(dwt_read32bitreg(SYS_STATUS_ID) & SYS_STATUS_TXFRS_BIT_MASK)) {
-     if (millis() - start_ms > 100) {
-      return false;
-     }
-  }
-
-  dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
-
-  return true;
+    delayMicroseconds(2); // just making sure that the dwm has enough time to re-enable it's receiver before I clear the bit
+    dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
+    
+    return complete;
 }
 
 void resetDWM() {
-  Serial.print("Resetting DWM3000... ");
-  pinMode(PIN_RST, OUTPUT);
-  digitalWrite(PIN_RST, LOW);
-  delay(10);
-  digitalWrite(PIN_RST, HIGH);
-  delay(20);
-  Serial.println("Done");
+    pinMode(PIN_RST, OUTPUT);
+    digitalWrite(PIN_RST, LOW);
+    delay(10);
+    digitalWrite(PIN_RST, HIGH);
+    delay(20);
 }
 
-void printDWMDiagnostics() {
-  dwt_rxdiag_t diagnostics;
-  dwt_readdiagnostics(&diagnostics);
-
-  Serial.printf("Ipatov Peak: 0x%08X\n", diagnostics.ipatovPeak);
-  Serial.printf("Ipatov Power: %u\n", diagnostics.ipatovPower);
-  Serial.printf("Ipatov FP Index: %u\n", diagnostics.ipatovFpIndex);
+/*! ------------------------------------------------------------------------------------------------------------------
+ * @brief This is used to read the system time
+ *
+ * input parameters
+ * @param timestamp - a pointer to a 4-byte buffer which will store the read system time
+ *
+ * output parameters
+ * @param timestamp - the timestamp buffer will contain the value after the function call
+ *
+ * no return value
+ */
+void dwt_readsystime(uint8_t * timestamp)
+{
+    dwt_readfromdevice(SYS_TIME_ID, 0, SYS_TIME_LEN, timestamp);
 }
