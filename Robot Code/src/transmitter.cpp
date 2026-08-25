@@ -215,27 +215,6 @@ void checkData() {
     uint32_t dest_address;
 
     switch (rx_data[4]) {
-        case 0xAA:
-            //Serial.println("Received 0xAA");
-
-            pixel.setPixelColor(0, pixel.Color(0, 0, 255));
-            pixel.show();
-
-            data[0] = 0xA0;
-            
-            if (!send(RECEIVER_ADDRESS, data, 1)) {
-                //Serial.println("Failed to send 0xA0");
-                dwt_rxenable(DWT_START_RX_IMMEDIATE);
-                return;
-            }
-
-            t1 = 0;
-            // capture t1
-            uint8_t ts1[5];
-            dwt_readtxtimestamp(ts1);
-            memcpy(&t1, &ts1[0], 5);
-
-            break;
         case 0x03:
             // capture t4 and respond
             t4 = 0;
@@ -268,10 +247,12 @@ void checkData() {
             dwt_writetxdata(sizeof(tx_packet), tx_packet, 0);
             dwt_writetxfctrl(sizeof(tx_packet) + 2, 0, 0);
 
-            if (dwt_starttx(DWT_START_TX_DELAYED | DWT_RESPONSE_EXPECTED) != DWT_SUCCESS) {
+            initiated = false; // send 0xAA again on next loop iteration
+
+            if (dwt_starttx(DWT_START_TX_DELAYED) != DWT_SUCCESS) {
                 //Serial.println("Delayed TX failed (timing window missed)");
                 dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
-                dwt_rxenable(DWT_START_RX_IMMEDIATE);
+                delay(2);
                 return;
             }
 
@@ -280,7 +261,7 @@ void checkData() {
             delayMicroseconds(2);
             dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
 
-            //Serial.println("Sent t1, t4, t5");
+            delay(2);
 
             break;
         default:

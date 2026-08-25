@@ -234,15 +234,6 @@ void checkData() {
             dwt_readrxtimestamp(ts6);
             memcpy(&t6, &ts6[0], 5);
 
-            //if (STATE != STATES::FINISH) {
-                data[0] = 0xAA;
-                if (!send(TRANSMITTER_ADDRESS, data, 1)) {
-                    //Serial.printf("Failed to send 0x%X\n", data[0]);
-                    dwt_rxenable(DWT_START_RX_IMMEDIATE);
-                    return;
-                }
-            //}   
-
             distance = calculateDistance();
             Serial.printf("Distance: %.2fcm\n", distance);
 
