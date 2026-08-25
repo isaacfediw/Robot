@@ -12,6 +12,8 @@
 
 #define DWM_ID 0xDECA0302
 
+#define MASK_40BIT 0x00FFFFFFFFFF
+
 #define RECEIVER_ADDRESS    0x00000001
 #define TRANSMITTER_ADDRESS 0x00000002
 
@@ -191,6 +193,7 @@ void checkData() {
             //Serial.println("Received 0xAA");
         case 0xA0:
             // capture t2
+            t2 = 0;
             uint8_t ts2[5];
             dwt_readrxtimestamp(ts2);
             memcpy(&t2, &ts2[0], 5);
@@ -199,11 +202,11 @@ void checkData() {
             data[0] = 0x03;
             if (!send(TRANSMITTER_ADDRESS, data, 1)) {
                 //Serial.println("Failed to send 0x03");
-                
                 dwt_rxenable(DWT_START_RX_IMMEDIATE);
                 return;
             }
 
+            t3 = 0;
             uint8_t ts3[5];
             dwt_readtxtimestamp(ts3);
             memcpy(&t3, &ts3[0], 5);
@@ -218,10 +221,14 @@ void checkData() {
 
             //Serial.println("Received 0x15");
 
+            t1 = 0;
+            t4 = 0;
+            t5 = 0;
             memcpy(&t1, &rx_data[5], 5);
             memcpy(&t4, &rx_data[10], 5);
             memcpy(&t5, &rx_data[15], 5);
 
+            t6 = 0;
             // capture t6
             uint8_t ts6[5];
             dwt_readrxtimestamp(ts6);
@@ -237,7 +244,7 @@ void checkData() {
             //}   
 
             distance = calculateDistance();
-            //Serial.printf("Distance: %.2fcm\n", distance);
+            Serial.printf("Distance: %.2fcm\n", distance);
 
             dwt_rxenable(DWT_START_RX_IMMEDIATE);
 
@@ -272,11 +279,11 @@ bool send(uint32_t dest_address, uint8_t data[], int data_size) {
 }
 
 double calculateDistance() {
-    int64_t round_trip_d1 = (int64_t) (t4 - t1); 
-    int64_t reply_d1 = (int64_t) (t3 - t2);
+    int64_t round_trip_d1 = (int64_t) ((t4 - t1) & MASK_40BIT); 
+    int64_t reply_d1 = (int64_t) ((t3 - t2) & MASK_40BIT);
     
-    int64_t round_trip_d2 = (int64_t) (t6 - t3);
-    int64_t reply_d2 = (int64_t) (t5 - t4);
+    int64_t round_trip_d2 = (int64_t) ((t6 - t3) & MASK_40BIT);
+    int64_t reply_d2 = (int64_t) ((t5 - t4) & MASK_40BIT);
 
     int64_t tof_num = round_trip_d1 * round_trip_d2 - reply_d1 * reply_d2;
     int64_t tof_denom = round_trip_d1 + round_trip_d2 + reply_d1 + reply_d2;

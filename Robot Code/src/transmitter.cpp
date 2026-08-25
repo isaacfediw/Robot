@@ -160,6 +160,7 @@ void loop() {
         if (send(RECEIVER_ADDRESS, data, 1)) {
             initiated = true;
 
+            t1 = 0;
             // capture t1
             uint8_t ts1[5];
             dwt_readtxtimestamp(ts1);
@@ -228,6 +229,7 @@ void checkData() {
                 return;
             }
 
+            t1 = 0;
             // capture t1
             uint8_t ts1[5];
             dwt_readtxtimestamp(ts1);
@@ -236,6 +238,7 @@ void checkData() {
             break;
         case 0x03:
             // capture t4 and respond
+            t4 = 0;
             uint8_t ts4[5];
             dwt_readrxtimestamp(ts4);
             memcpy(&t4, &ts4[0], 5);
@@ -249,7 +252,7 @@ void checkData() {
 
             dwt_setdelayedtrxtime(delayed_time);
             
-            t5 = ((uint64_t) delayed_time) << 8;
+            t5 = (((uint64_t) delayed_time) << 8) + TX_ANT_DLY;
 
             uint8_t final_payload[16];
             final_payload[0] = 0x15;

@@ -112,7 +112,7 @@ uint64_t t2; // timestamp when receiver received frame
 uint64_t t3; // timestamp when receiver sent response
 uint64_t t4; // timestamp when transmitter received response
 uint64_t t5; // timestamp when transmitted sends second frame
-uint64_t t6; // timestamp when receiever received second frame
+uint64_t t6; // timestamp when receiver received second frame
 
 Adafruit_VL53L0X tof1 = Adafruit_VL53L0X();
 Adafruit_VL53L0X tof2 = Adafruit_VL53L0X();
