@@ -28,7 +28,7 @@ extern "C" {
 #define RX_ANT_DLY 16385
 
 #define POLL_TX_TO_RESP_RX_DLY_UUS 600
-#define RESP_RX_TIMEOUT_UUS 400
+#define RESP_RX_TIMEOUT_UUS 4000
 
 // spi definitions
 #define SCK  2
@@ -136,6 +136,7 @@ void setup() {
     dwt_settxantennadelay(TX_ANT_DLY);
 
     dwt_setrxaftertxdelay(POLL_TX_TO_RESP_RX_DLY_UUS);
+    dwt_setrxtimeout(RESP_RX_TIMEOUT_UUS);
 
     // setup interrupts
     dwt_setinterrupt(DWT_INT_RX, 0, DWT_ENABLE_INT_ONLY);
@@ -153,6 +154,8 @@ void loop() {
 
         pixel.setPixelColor(0, pixel.Color(0, 0, 0));
         pixel.show();
+
+        Serial.println("Sent 0xFF");
 
         initiated = false;
     } else if (digitalRead(AUTO) && !initiated) {
@@ -172,12 +175,24 @@ void loop() {
         }
     }
 
-    if (digitalRead(AUTO) && uwb_irq && initiated) checkData();
+    if (digitalRead(AUTO) && uwb_irq && initiated) {
+        uwb_irq = false;
+
+        // this checks if bit 17 is set in SYS_STATUS register
+        // bit 17 marks if the interrupt event was caused by receive wait timeout
+        // if this receiver timed out it means we didn't get a packet from the robot
+        // so we will need to send 0xAA again to start up the loop again
+        // the result of this should appear as a seamless loop to the user
+        uint32_t sys_status = dwt_read32bitreg(SYS_STATUS_ID);
+
+        if (sys_status & SYS_STATUS_RXFTO_BIT_MASK) {
+            dwt_write32bitreg(SYS_STATUS_ID, sys_status & SYS_STATUS_RXFTO_BIT_MASK);
+            initiated = false;
+        } else checkData();
+    }
 }
 
 void checkData() {
-    uwb_irq = false;
-
     //Serial.println("Checking Data");
 
     uint32_t status = dwt_read32bitreg(SYS_STATUS_ID);

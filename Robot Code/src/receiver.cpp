@@ -29,16 +29,20 @@
 #define CS 1
 #define SPI_CLK_SPEED 2000000
 
+// distance definitions
+#define LENGTH 31
+#define UPSAMPLE_FACTOR 4
 
 // function definitions
 void resetDWM();
+double convolve(float h[], double x[]) ;
 void checkData();
 double calculateDistance();
 bool send(uint32_t dest_address, uint8_t data[], int data_size);
 
 
 // global variables
-enum class STATES {INITIAL, FINISH};
+enum class STATES {INITIAL, MOVING, FINISH};
 STATES STATE;
 
 uint64_t t1;
@@ -47,6 +51,22 @@ uint64_t t3;
 uint64_t t4;
 uint64_t t5;
 uint64_t t6;
+
+int distance_index;
+
+double x[LENGTH];
+float history_buffer[LENGTH - 1] = {0};
+double distance_buffer[LENGTH];
+float inputs_with_history[LENGTH*2 - 1] = {0};
+
+float h[LENGTH] = { 
+    1.6583E-03,1.9273E-03,1.8793E-03,7.1205E-04,-2.4593E-03,-7.7846E-03,
+    -1.3926E-02,-1.7847E-02,-1.5438E-02,-2.9032E-03,2.1541E-02,5.6360E-02,
+    9.6409E-02,1.3395E-01,1.6071E-01,1.7042E-01,1.6071E-01,1.3395E-01,
+    9.6409E-02,5.6360E-02,2.1541E-02,-2.9032E-03,-1.5438E-02,-1.7847E-02,
+    -1.3926E-02,-7.7846E-03,-2.4593E-03,7.1205E-04,1.8793E-03,1.9273E-03,
+    1.6583E-03
+};
 
 volatile bool uwb_irq = false;
 
@@ -131,6 +151,12 @@ void setup() {
      // note that the pin_irq is already set up as an input in spiBegin()
     attachInterrupt(digitalPinToInterrupt(PIN_IRQ), dwm3000_isr, RISING);
 
+    STATE = STATES::INITIAL;
+
+    for (int i = 0; i < LENGTH; i++) {
+        x[i] = 0;
+    }
+
     dwt_rxenable(DWT_START_RX_IMMEDIATE);
 
     Serial.println("All initialization complete (receiver)");
@@ -189,9 +215,8 @@ void checkData() {
             
             break;
         case 0xAA:
-            STATE = STATES::INITIAL;
             //Serial.println("Received 0xAA");
-        case 0xA0:
+
             // capture t2
             t2 = 0;
             uint8_t ts2[5];
@@ -234,7 +259,31 @@ void checkData() {
             dwt_readrxtimestamp(ts6);
             memcpy(&t6, &ts6[0], 5);
 
+            /*distance_buffer[distance_index] = calculateDistance();
+            distance_index = distance_index >= (LENGTH - 1) ? 0 : distance_index + 1;
+
+            for (int i = 0; i < sizeof(inputs_with_history)/sizeof(float); i++) {
+                if (i < sizeof(history_buffer)/sizeof(float)) inputs_with_history[i] = history_buffer[i];
+                else inputs_with_history[i] = distance_buffer[i - sizeof(history_buffer)/sizeof(float)];
+            }
+
+            double zeroStuffedInput[(LENGTH*2 - 1) * UPSAMPLE_FACTOR] = {0};
+            for (int i = 0; i < sizeof(inputs_with_history)/sizeof(float); i++) {
+                zeroStuffedInput[i * UPSAMPLE_FACTOR] = inputs_with_history[i];
+            }
+
+            distance = convolve(h, zeroStuffedInput);*/
+
             distance = calculateDistance();
+
+	        // shift every input up by one and put distance into x[0]
+            for (int i = LENGTH - 1; i > 0; i--) {
+                x[i] = x[i - 1];
+            }
+            x[0] = distance;
+
+	        distance = convolve(h, x);
+            
             Serial.printf("Distance: %.2fcm\n", distance);
 
             dwt_rxenable(DWT_START_RX_IMMEDIATE);
@@ -283,6 +332,16 @@ double calculateDistance() {
     double tof_seconds = tof * DWT_TIME_UNITS;
 
     return tof_seconds * SPEED_OF_LIGHT * 100;
+}
+
+double convolve(float h[], double x[]) {
+    double y = 0;
+
+    for (int i = 0; i <= LENGTH - 1; i++) {
+        y += x[i]*h[i]; // x is already shifted by the fact that we put new data into the array every cycle
+    }
+
+    return y;
 }
 
 void resetDWM() {
