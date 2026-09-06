@@ -42,7 +42,7 @@ R_2 &= 2T + D_2 \\[1.5em]
 &= (2T + D_1) + (2T + D_2) + D_1 + D_2 \\
 &= 4T + 2D_1 + 2D_2 \\
 &= 2(2T + D_1 + D_2) \\[1.5em]
-\text{3. Final Division \& Cancellation:} & \\
+\text{3. Final Division and Cancellation:} & \\
 \text{tof} &= \frac{\mathrm{tof\_num}}{\mathrm{tof\_denom}} \\[0.5em]
 &= \frac{2T(2T + D_1 + D_2)}{2(2T + D_1 + D_2)} \\[0.5em]
 &= \frac{2T}{2} \\[0.5em]
