@@ -32,18 +32,18 @@ $$
 R_1 &= 2T + D_1 \\
 R_2 &= 2T + D_2 \\[1.5em]
 \text{1. Numerator Expansion:} & \\
-\text{tof\_num} &= R_1 R_2 - D_1 D_2 \\
+\mathrm{tof\_num} &= R_1 R_2 - D_1 D_2 \\
 &= (2T + D_1)(2T + D_2) - D_1 D_2 \\
 &= 4T^2 + 2T D_2 + 2T D_1 + D_1 D_2 - D_1 D_2 \\
 &= 4T^2 + 2T(D_1 + D_2) \\
 &= 2T(2T + D_1 + D_2) \\[1.5em]
 \text{2. Denominator Expansion:} & \\
-\text{tof\_denom} &= R_1 + R_2 + D_1 + D_2 \\
+\mathrm{tof\_denom} &= R_1 + R_2 + D_1 + D_2 \\
 &= (2T + D_1) + (2T + D_2) + D_1 + D_2 \\
 &= 4T + 2D_1 + 2D_2 \\
 &= 2(2T + D_1 + D_2) \\[1.5em]
 \text{3. Final Division \& Cancellation:} & \\
-\text{tof} &= \frac{\text{tof\_num}}{\text{tof\_denom}} \\[0.5em]
+\text{tof} &= \frac{\mathrm{tof\_num}}{\mathrm{tof\_denom}} \\[0.5em]
 &= \frac{2T(2T + D_1 + D_2)}{2(2T + D_1 + D_2)} \\[0.5em]
 &= \frac{2T}{2} \\[0.5em]
 &= T
