@@ -25,27 +25,43 @@ time for the second frame. The time of flight (tof) then calculated as:
 <details> 
   <summary> For the proof on why the tof equation works click here </summary>
 
+### DS-TWR Time-of-Flight Derivation
+
+**Definitions:**
 $$
 \begin{aligned}
-\text{DS-TWR Time-of-Flight Derivation} \\[1em]
-\text{Definitions:} & \\
 R_1 &= 2T + D_1 \\
-R_2 &= 2T + D_2 \\[1.5em]
-\text{1. Numerator Expansion:} & \\
+R_2 &= 2T + D_2
+\end{aligned}
+$$
+
+#### 1. Numerator Expansion:
+$$
+\begin{aligned}
 \mathrm{tof\_num} &= R_1 R_2 - D_1 D_2 \\
 &= (2T + D_1)(2T + D_2) - D_1 D_2 \\
 &= 4T^2 + 2T D_2 + 2T D_1 + D_1 D_2 - D_1 D_2 \\
 &= 4T^2 + 2T(D_1 + D_2) \\
-&= 2T(2T + D_1 + D_2) \\[1.5em]
-\text{2. Denominator Expansion:} & \\
+&= 2T(2T + D_1 + D_2)
+\end{aligned}
+$$
+
+#### 2. Denominator Expansion:
+$$
+\begin{aligned}
 \mathrm{tof\_denom} &= R_1 + R_2 + D_1 + D_2 \\
 &= (2T + D_1) + (2T + D_2) + D_1 + D_2 \\
 &= 4T + 2D_1 + 2D_2 \\
-&= 2(2T + D_1 + D_2) \\[1.5em]
-\text{3. Final Division and Cancellation:} & \\
-\text{tof} &= \frac{\mathrm{tof\_num}}{\mathrm{tof\_denom}} \\[0.5em]
-&= \frac{2T(2T + D_1 + D_2)}{2(2T + D_1 + D_2)} \\[0.5em]
-&= \frac{2T}{2} \\[0.5em]
+&= 2(2T + D_1 + D_2)
+\end{aligned}
+$$
+
+#### 3. Final Division and Cancellation:
+$$
+\begin{aligned}
+\text{tof} &= \frac{\mathrm{tof\_num}}{\mathrm{tof\_denom}} \\
+&= \frac{2T(2T + D_1 + D_2)}{2(2T + D_1 + D_2)} \\
+&= \frac{2T}{2} \\
 &= T
 \end{aligned}
 $$
