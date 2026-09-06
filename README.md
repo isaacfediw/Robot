@@ -26,16 +26,7 @@ time for the second frame. The time of flight (tof) then calculated as:
   <summary> For the proof on why the tof equation works click here </summary>
 
 ### DS-TWR Time-of-Flight Derivation
-
-Definitions:
-$$
-\begin{aligned}
-R_1 &= 2T + D_1 \\
-R_2 &= 2T + D_2
-\end{aligned}
-$$
-
-1. Numerator Expansion:
+#### 1. Numerator Expansion:
 $$
 \begin{aligned}
 \mathrm{tof\_num} &= R_1 R_2 - D_1 D_2 \\
@@ -46,7 +37,7 @@ $$
 \end{aligned}
 $$
 
-2. Denominator Expansion:
+#### 2. Denominator Expansion:
 $$
 \begin{aligned}
 \mathrm{tof\_denom} &= R_1 + R_2 + D_1 + D_2 \\
@@ -56,7 +47,7 @@ $$
 \end{aligned}
 $$
 
-3. Final Division and Cancellation:
+#### 3. Final Division and Cancellation:
 $$
 \begin{aligned}
 \text{tof} &= \frac{\mathrm{tof\_num}}{\mathrm{tof\_denom}} \\
