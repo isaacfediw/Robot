@@ -347,7 +347,7 @@ void manualControl() {
 
     bool turning = abs(xVal) > abs(yVal);
 
-    uint8_t data[3]; // first bit -> manual header, second bit -> direction, third bit -> steps
+    uint8_t data[3]; // first byte -> manual header, second byte -> direction, third byte -> steps
     data[0] = 0xAB;
 
     int steps = 0;
