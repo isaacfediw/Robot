@@ -8,7 +8,24 @@ In auto mode the robot is designed to track the position of the transmitter and 
 The DWM3000 can provide highly accurate and precise measurements when done correctly. The  
 method I used for finding the distance between the robot (receiver) and the transmitter is known as  
 double-sided two-way ranging. After calculating the distance I apply a lowpass fir filter to it using  
-a hamming window with 31 taps. 
+a hamming window with 31 taps. Once the distance is calculated the robot pivots itself slightly to the  
+left and measures the distance again. It takes note of when the distance is incrementing. If the distance  
+starts to decrement after it has already been noticed to increment the robot knows that the position before  
+the last slight left pivot must be when the receiver antenna is angled farthest away from the transmitter  
+antenna. This works because the receiver antenna is mounted near the end of the robot chassis.  
+
+<img width="4080" height="3060" alt="20260906_153709" src="https://github.com/user-attachments/assets/e36d3082-1d0c-41d9-9f4c-722fdf078bc8" />
+
+The problem with my current setup is that my distance measurements are not precise nor accurate when the  
+receiver is mounted on the robot chassis. This is because the DWM3000 antennas are vertically polarized,  
+which means they will communicate with the lowest amount of noise when they are both on the XZ plane.  
+Although slightly more noisy (with introduced nulls), if both antenna are positioned on the XY plane,  
+perpendicular to each other, the measurements are still relatively accurate and precise. For the time  
+being (while in their respective chassis), the transmitter antenna is positioned on the XY plane and the  
+receiver antenna is positioned on the YZ plane. This makes the measurements significantly inaccurate and  
+imprecise, preventing auto mode from correctly working. My hope is to redesign the robot chassis to   
+support ideally an antenna which is positioned on the XY plane but at the least on a 45 degree angle  
+between the XY and YZ planes.  
 
 **How double-sided two-way ranging works**  
 6 timestamps are measured: t1 (measured when the transmitter  
