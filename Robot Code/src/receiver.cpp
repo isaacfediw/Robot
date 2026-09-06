@@ -2,6 +2,7 @@
 #include <SPI.h>
 
 #include "dw3000.h"
+#include "stepper.h"
 
 
 // define statements
@@ -17,10 +18,15 @@
 #define RECEIVER_ADDRESS    0x00000001
 #define TRANSMITTER_ADDRESS 0x00000002
 
-#define TX_ANT_DLY 16385
-#define RX_ANT_DLY 16385
+#define TX_ANT_DLY 16350
+#define RX_ANT_DLY 16350
+
+// #define TX_ANT_DLY 16385
+// #define RX_ANT_DLY 16385
 
 #define POLL_TX_TO_RESP_RX_DLY_UUS 600
+
+#define NLOS_THRESHOLD_DB 6.0f // Threshold in dBm; values > 6.0 indicate an obstructed path
 
 // spi definitions
 #define SCK 2
@@ -33,15 +39,37 @@
 #define LENGTH 31
 #define UPSAMPLE_FACTOR 4
 
+// stepper definitions
+#define LEFT_STEPPER_FORWARD   1
+#define LEFT_STEPPER_BACKWARD  0
+#define RIGHT_STEPPER_FORWARD  0
+#define RIGHT_STEPPER_BACKWARD 1
+
+// left stepper
+#define DIR1  29
+#define STEP1 28
+#define EN1   13
+
+// right stepper
+#define DIR2  27
+#define STEP2 26
+#define EN2   12
+
 // function definitions
 void resetDWM();
 double convolve(float h[], double x[]) ;
 void checkData();
 double calculateDistance();
 bool send(uint32_t dest_address, uint8_t data[], int data_size);
+void moveSteppers(int left_steps, int right_steps);
 
 
 // global variables
+int leftPins[3] = {STEP1, DIR1, EN1};
+int rightPins[3] = {STEP2, DIR2, EN2};
+stepper leftStepper(leftPins);
+stepper rightStepper(rightPins);
+
 enum class STATES {INITIAL, MOVING, FINISH};
 STATES STATE;
 
@@ -52,12 +80,7 @@ uint64_t t4;
 uint64_t t5;
 uint64_t t6;
 
-int distance_index;
-
 double x[LENGTH];
-float history_buffer[LENGTH - 1] = {0};
-double distance_buffer[LENGTH];
-float inputs_with_history[LENGTH*2 - 1] = {0};
 
 float h[LENGTH] = { 
     1.6583E-03,1.9273E-03,1.8793E-03,7.1205E-04,-2.4593E-03,-7.7846E-03,
@@ -204,10 +227,40 @@ void checkData() {
     
     uint8_t data[1];
     double distance;
+    
+    int steps, left_steps, right_steps;
 
     //Serial.printf("Received header 0x%X\n", rx_data[4]);
 
     switch (rx_data[4]) {
+        case 0xAB: // manual mode header
+
+            memcpy(&steps, &rx_data[6], 1);
+
+            switch (rx_data[5]) { // direction
+                case 0x10: // left
+                    left_steps = -steps;
+                    right_steps = steps;
+                    break;
+                case 0x11: // right
+                    left_steps = steps;
+                    right_steps = -steps;
+                    break;
+                case 0x00: // forward
+                    left_steps = steps;
+                    right_steps = steps;
+                    break;
+                case 0x01: // backward
+                    left_steps = -steps;
+                    right_steps = -steps;                    
+                    break;
+                default: break;
+            }
+
+            moveSteppers(left_steps, right_steps);
+
+            dwt_rxenable(DWT_START_RX_IMMEDIATE);
+            break;
         case 0xFF:
             STATE = STATES::FINISH;
             //Serial.println("Received 0xFF");
@@ -259,30 +312,15 @@ void checkData() {
             dwt_readrxtimestamp(ts6);
             memcpy(&t6, &ts6[0], 5);
 
-            /*distance_buffer[distance_index] = calculateDistance();
-            distance_index = distance_index >= (LENGTH - 1) ? 0 : distance_index + 1;
-
-            for (int i = 0; i < sizeof(inputs_with_history)/sizeof(float); i++) {
-                if (i < sizeof(history_buffer)/sizeof(float)) inputs_with_history[i] = history_buffer[i];
-                else inputs_with_history[i] = distance_buffer[i - sizeof(history_buffer)/sizeof(float)];
-            }
-
-            double zeroStuffedInput[(LENGTH*2 - 1) * UPSAMPLE_FACTOR] = {0};
-            for (int i = 0; i < sizeof(inputs_with_history)/sizeof(float); i++) {
-                zeroStuffedInput[i * UPSAMPLE_FACTOR] = inputs_with_history[i];
-            }
-
-            distance = convolve(h, zeroStuffedInput);*/
-
             distance = calculateDistance();
 
-	        // shift every input up by one and put distance into x[0]
+            // shift every input up by one and put distance into x[0]
             for (int i = LENGTH - 1; i > 0; i--) {
                 x[i] = x[i - 1];
             }
             x[0] = distance;
 
-	        distance = convolve(h, x);
+            distance = convolve(h, x);
             
             Serial.printf("Distance: %.2fcm\n", distance);
 
@@ -332,6 +370,23 @@ double calculateDistance() {
     double tof_seconds = tof * DWT_TIME_UNITS;
 
     return tof_seconds * SPEED_OF_LIGHT * 100;
+}
+
+// moves both steppers (not just a scheduler)
+// put steps negative to be backwards, postive for forwards
+void moveSteppers(int left_steps, int right_steps) {
+    Serial.printf("left_steps: %d, right_steps: %d\n", left_steps, right_steps);
+
+    int left_dir = left_steps < 0 ? LEFT_STEPPER_BACKWARD : LEFT_STEPPER_FORWARD;
+    int right_dir = right_steps < 0 ? RIGHT_STEPPER_BACKWARD : RIGHT_STEPPER_FORWARD;
+
+    leftStepper.moveStepper(left_dir, abs(left_steps));        
+    rightStepper.moveStepper(right_dir, abs(right_steps));  
+
+    while (leftStepper.isBusy() || rightStepper.isBusy()) {
+    leftStepper.stepperLoop();
+    rightStepper.stepperLoop();
+    }
 }
 
 double convolve(float h[], double x[]) {

@@ -14,6 +14,19 @@ extern "C" {
 #define ON_BOARD_LED 16
 #define NUM_PIXELS   1
 
+// joystick definitions
+#define JOY_Y  29
+#define JOY_X  28
+#define JOY_SW 27 // give this an internal pull-up resistor
+
+#define UPPER_ADC_VALUE 260  // adjusted for resting_pos of 540
+#define LOWER_ADC_VALUE -240 // adjusted for resting_pos of 540
+#define JOY_DEADZONE    50
+#define RESTING_POS     540 
+
+#define MAX_STEPS       100
+#define MIN_STEPS       10
+
 // dwm3000 definitions
 #define PIN_IRQ 6
 #define PIN_RST 7
@@ -24,8 +37,11 @@ extern "C" {
 #define RECEIVER_ADDRESS    0x00000001
 #define TRANSMITTER_ADDRESS 0x00000002
 
-#define TX_ANT_DLY 16385
-#define RX_ANT_DLY 16385
+#define TX_ANT_DLY 16350
+#define RX_ANT_DLY 16350
+
+// #define TX_ANT_DLY 16385
+// #define RX_ANT_DLY 16385
 
 #define POLL_TX_TO_RESP_RX_DLY_UUS 600
 #define RESP_RX_TIMEOUT_UUS 4000
@@ -44,7 +60,7 @@ extern "C" {
 void resetDWM();
 void checkData();
 bool send(uint32_t dest_address, uint8_t  data[], int data_size, bool expect_response = true);
-
+void manualControl();
 
 // global variables
 uint64_t t1;
@@ -94,6 +110,11 @@ void setup() {
 
     pinMode(CS, OUTPUT);
     digitalWrite(CS, HIGH);
+
+    // joystick initialization
+    pinMode(JOY_X, INPUT);
+    pinMode(JOY_Y, INPUT);
+    pinMode(JOY_SW, INPUT_PULLUP);
 
     // auto button initialization
     pinMode(AUTO, INPUT_PULLDOWN);
@@ -175,6 +196,7 @@ void loop() {
         }
     }
 
+    // auto mode
     if (digitalRead(AUTO) && uwb_irq && initiated) {
         uwb_irq = false;
 
@@ -189,6 +211,10 @@ void loop() {
             dwt_write32bitreg(SYS_STATUS_ID, sys_status & SYS_STATUS_RXFTO_BIT_MASK);
             initiated = false;
         } else checkData();
+
+    // manual mode
+    } else if (!digitalRead(AUTO)) {
+        manualControl();
     }
 }
 
@@ -308,6 +334,39 @@ bool send(uint32_t dest_address, uint8_t data[], int data_size, bool expect_resp
     dwt_write32bitreg(SYS_STATUS_ID, SYS_STATUS_TXFRS_BIT_MASK);
     
     return complete;
+}
+
+void manualControl() {
+    int xVal = analogRead(JOY_X) - RESTING_POS;
+    int yVal = analogRead(JOY_Y) - RESTING_POS;
+
+    xVal = abs(xVal) <= JOY_DEADZONE ? 0 : xVal;
+    yVal = abs(yVal) <= JOY_DEADZONE ? 0 : yVal;
+    
+    if (xVal == 0 && yVal == 0) return;
+
+    bool turning = abs(xVal) > abs(yVal);
+
+    uint8_t data[3]; // first bit -> manual header, second bit -> direction, third bit -> steps
+    data[0] = 0xAB;
+
+    int steps = 0;
+
+    if (turning) {
+        if (xVal > 0) data[1] = 0x10; // left
+        else data[1] = 0x11; // right
+
+        steps = map(abs(xVal), LOWER_ADC_VALUE, UPPER_ADC_VALUE, MIN_STEPS, MAX_STEPS);
+    } else {
+        if (yVal > 0) data[1] = 0x00; // forward
+        else data[1] = 0x01; // backward
+
+        steps = map(abs(yVal), LOWER_ADC_VALUE, UPPER_ADC_VALUE, MIN_STEPS, MAX_STEPS);
+    }
+
+    memcpy(&data[2], &steps, 1);
+
+    send(RECEIVER_ADDRESS, data, 3, false);
 }
 
 void resetDWM() {
