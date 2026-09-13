@@ -375,7 +375,7 @@ void manualControl() {
         if (xVal > 0) data[1] = 0x10; // left
         else data[1] = 0x11; // right
 
-        steps = map(abs(xVal), LOWER_ADC_VALUE, UPPER_ADC_VALUE, MIN_STEPS, MAX_STEPS);
+        steps = map(abs(xVal), LOWER_ADC_VALUE, UPPER_ADC_VALUE, MIN_STEPS/2, MAX_STEPS/2);
     } else {
         if (yVal > 0) data[1] = 0x00; // forward
         else data[1] = 0x01; // backward

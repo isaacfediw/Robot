@@ -1,9 +1,12 @@
 #include <Arduino.h>
 #include <SPI.h>
+#include <vector>
 
 #include "dw3000.h"
 #include "Adafruit_VL53L0X.h"
 #include "stepper.h"
+
+#include "perlin_noise_walking.cpp"
 
 
 // define statements
@@ -100,6 +103,9 @@ stepper rightStepper(rightPins);
 Adafruit_VL53L0X tof1 = Adafruit_VL53L0X();
 Adafruit_VL53L0X tof2 = Adafruit_VL53L0X();
 Adafruit_VL53L0X tof3 = Adafruit_VL53L0X();
+
+std::vector<int> dirs; // directions vector for random mode
+StepperNoiseDriver driver;
 
 enum class STATES {INITIAL, MOVING, FINISH};
 STATES STATE;
@@ -304,8 +310,7 @@ void checkData() {
     float left_sensor_distance, right_sensor_distance;
     bool left_clear, right_clear;
 
-    int valid_dirs[4];
-    int count, choice;
+    int choice;
 
     Serial.printf("Received header 0x%X\n", rx_data[4]);
 
@@ -339,7 +344,7 @@ void checkData() {
 
             break;
         case 0xAC: // random mode header
-            // in this mode we just move the robot around randomly, accounting for obstacles using the tof sensors
+            /*// in this mode we just move the robot around randomly, accounting for obstacles using the tof sensors
             steps = random(MIN_RANDOM_MODE_STEPS, MAX_RANDOM_MODE_STEPS + 1);
 
             left_sensor_distance = tofSensorDistance(TOF3_ADDR);
@@ -349,14 +354,19 @@ void checkData() {
             right_clear = right_sensor_distance == OUT_OF_RANGE || right_sensor_distance > TOO_CLOSE;
             // also do same for forward when it's set up
 
-            count = 0;
+            dirs.clear();
 
-            valid_dirs[count++] = 0; // always valid till front sensor is added
-            valid_dirs[count++] = 1; // always valid
-            if (left_clear) valid_dirs[count++] = 2;
-            if (right_clear) valid_dirs[count++] = 3;
+            // always valid till front sensor is added
+            // going forward should have a higher chance so the robot actually moves with 'purpose'
+            dirs.push_back(0);
+            dirs.push_back(0);
+            dirs.push_back(0);
 
-            choice = valid_dirs[random(0, count)];
+            dirs.push_back(1); // always valid
+            if (left_clear) dirs.push_back(2);
+            if (right_clear) dirs.push_back(3);
+
+            choice = dirs.at(random(0, dirs.size()));
 
             switch (choice) {
                 case 0:
@@ -376,6 +386,26 @@ void checkData() {
                     right_steps = -steps;
                     break;
                 default: break;
+            }*/
+
+            left_sensor_distance = tofSensorDistance(TOF3_ADDR);
+            right_sensor_distance = tofSensorDistance(TOF2_ADDR);
+
+            driver.update();
+
+            left_steps = driver.left_steps;
+            right_steps = driver.right_steps;
+
+            // check if driver wants to go left
+            if (left_steps < right_steps) {
+                if (left_sensor_distance != OUT_OF_RANGE && left_sensor_distance <= TOO_CLOSE) {
+                    left_steps *= -1;
+                }
+            // check if the driver wants to go right
+            } else if (left_steps > right_steps) {
+                if (right_sensor_distance != OUT_OF_RANGE && right_sensor_distance <= TOO_CLOSE) {
+                    right_steps *= -1;
+                }
             }
 
             moveSteppers(left_steps, right_steps);
