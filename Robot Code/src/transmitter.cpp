@@ -15,9 +15,10 @@ extern "C" {
 #define NUM_PIXELS   1
 
 // joystick definitions
-#define JOY_Y  29
-#define JOY_X  28
-#define JOY_SW 27 // give this an internal pull-up resistor
+#define JOY_Y    29
+#define JOY_X    28
+#define JOY_SW   27 // give this an internal pull-up resistor
+#define SW_DELAY 500
 
 #define UPPER_ADC_VALUE 260  // adjusted for resting_pos of 540
 #define LOWER_ADC_VALUE -240 // adjusted for resting_pos of 540
@@ -37,8 +38,8 @@ extern "C" {
 #define RECEIVER_ADDRESS    0x00000001
 #define TRANSMITTER_ADDRESS 0x00000002
 
-#define TX_ANT_DLY 16350
-#define RX_ANT_DLY 16350
+#define TX_ANT_DLY 16351
+#define RX_ANT_DLY 16351
 
 // #define TX_ANT_DLY 16385
 // #define RX_ANT_DLY 16385
@@ -68,7 +69,10 @@ uint64_t t4;
 uint64_t t5;
 
 bool initiated = false;
+bool randomMode = false;
 volatile bool uwb_irq = false;
+
+uint64_t buttonStart;
 
 Adafruit_NeoPixel pixel(NUM_PIXELS, ON_BOARD_LED, NEO_GRB + NEO_KHZ800);
 
@@ -102,6 +106,7 @@ void setup() {
 
     uint32_t start = millis();
     while (!Serial && (millis() - start < 3000));
+    delay(5);
 
     // spi initialization
     SPI.setSCK(SCK);
@@ -115,6 +120,8 @@ void setup() {
     pinMode(JOY_X, INPUT);
     pinMode(JOY_Y, INPUT);
     pinMode(JOY_SW, INPUT_PULLUP);
+
+    buttonStart = millis();
 
     // auto button initialization
     pinMode(AUTO, INPUT_PULLDOWN);
@@ -194,6 +201,15 @@ void loop() {
         } else {
             //Serial.println("Failed to send 0xAA");
         }
+    } else if (!digitalRead(JOY_SW)) { // active low
+        if (millis() - buttonStart >= SW_DELAY) {
+            buttonStart = millis();
+
+            randomMode = !randomMode;
+
+            pixel.setPixelColor(0, pixel.Color(0, randomMode ? 255 : 0, 0));
+            pixel.show();
+        }
     }
 
     // auto mode
@@ -213,8 +229,11 @@ void loop() {
         } else checkData();
 
     // manual mode
-    } else if (!digitalRead(AUTO)) {
+    } else if (!digitalRead(AUTO) && !randomMode) {
         manualControl();
+    } else if (randomMode) {
+        uint8_t data[1] = {0xAC};
+        send(RECEIVER_ADDRESS, data, 1, false);
     }
 }
 

@@ -2,6 +2,7 @@
 #include <SPI.h>
 
 #include "dw3000.h"
+#include "Adafruit_VL53L0X.h"
 #include "stepper.h"
 
 
@@ -18,8 +19,8 @@
 #define RECEIVER_ADDRESS    0x00000001
 #define TRANSMITTER_ADDRESS 0x00000002
 
-#define TX_ANT_DLY 16350
-#define RX_ANT_DLY 16350
+#define TX_ANT_DLY 16351
+#define RX_ANT_DLY 16351
 
 // #define TX_ANT_DLY 16385
 // #define RX_ANT_DLY 16385
@@ -35,6 +36,25 @@
 #define CS 1
 #define SPI_CLK_SPEED 2000000
 
+// i2c definitions
+#define SCL 15
+#define SDA 14
+#define TOF1_ADDR    0x30
+#define TOF2_ADDR    0x31
+#define TOF3_ADDR    0x32
+
+// tof definitions
+#define TOF1_XSHUT 11 // front
+#define TOF2_XSHUT 10 // right
+#define TOF3_XSHUT 9  // left
+
+#define TOF1_OFFSET 0 //20
+#define TOF2_OFFSET 29
+#define TOF3_OFFSET 52
+
+#define OUT_OF_RANGE -20.0f
+#define TOO_CLOSE 50 // 50 mm
+
 // distance definitions
 #define LENGTH 31
 #define UPSAMPLE_FACTOR 4
@@ -44,6 +64,9 @@
 #define LEFT_STEPPER_BACKWARD  0
 #define RIGHT_STEPPER_FORWARD  0
 #define RIGHT_STEPPER_BACKWARD 1
+
+#define MIN_RANDOM_MODE_STEPS  20
+#define MAX_RANDOM_MODE_STEPS  100
 
 // left stepper
 #define DIR1  29
@@ -55,6 +78,7 @@
 #define STEP2 26
 #define EN2   12
 
+
 // function definitions
 void resetDWM();
 double convolve(float h[], double x[]) ;
@@ -62,6 +86,9 @@ void checkData();
 double calculateDistance();
 bool send(uint32_t dest_address, uint8_t data[], int data_size);
 void moveSteppers(int left_steps, int right_steps);
+float tofSensorDistance(uint8_t address);
+
+void serviceSensorsNonBlocking();
 
 
 // global variables
@@ -69,6 +96,10 @@ int leftPins[3] = {STEP1, DIR1, EN1};
 int rightPins[3] = {STEP2, DIR2, EN2};
 stepper leftStepper(leftPins);
 stepper rightStepper(rightPins);
+
+Adafruit_VL53L0X tof1 = Adafruit_VL53L0X();
+Adafruit_VL53L0X tof2 = Adafruit_VL53L0X();
+Adafruit_VL53L0X tof3 = Adafruit_VL53L0X();
 
 enum class STATES {INITIAL, MOVING, FINISH};
 STATES STATE;
@@ -123,6 +154,7 @@ void setup() {
 
     uint32_t start = millis();
     while (!Serial && (millis() - start < 3000));
+    delay(5);
 
     // spi initialization
     SPI.setSCK(SCK);
@@ -180,8 +212,47 @@ void setup() {
         x[i] = 0;
     }
 
-    dwt_rxenable(DWT_START_RX_IMMEDIATE);
+    // IT IS VITAL THAT TOF INITIALIZATION HAPPENS AFTER DWM INITIALIZATION
+    // tof sensor initialization
+    pinMode(TOF1_XSHUT, OUTPUT);
+    pinMode(TOF2_XSHUT, OUTPUT);
+    pinMode(TOF3_XSHUT, OUTPUT);
 
+    // assign addresses to TOF Sensors
+    digitalWrite(TOF1_XSHUT, 0);
+    digitalWrite(TOF2_XSHUT, 0);
+    digitalWrite(TOF3_XSHUT, 0);
+    delay(10);
+
+    Wire1.setSDA(SDA); 
+    Wire1.setSCL(SCL);
+    Wire1.begin();
+
+    digitalWrite(TOF1_XSHUT, 1);
+    delay(10);
+    if (!tof1.begin(TOF1_ADDR, false, &Wire1)) {
+        Serial.println(F("Failed to boot Sensor 1"));
+    }
+    tof1.setMeasurementTimingBudgetMicroSeconds(33000);
+
+    digitalWrite(TOF2_XSHUT, 1);
+    delay(10);
+    if (!tof2.begin(TOF2_ADDR, false, &Wire1)) {
+        Serial.println(F("Failed to boot Sensor 2"));
+    }
+    tof2.setMeasurementTimingBudgetMicroSeconds(33000);
+
+    digitalWrite(TOF3_XSHUT, 1);
+    delay(10);
+    if (!tof3.begin(TOF3_ADDR, false, &Wire1)) {
+        Serial.println(F("Failed to boot Sensor 3"));
+    }
+    tof3.setMeasurementTimingBudgetMicroSeconds(33000);
+
+    Serial.println(F("Booted sensors ready!"));
+
+
+    dwt_rxenable(DWT_START_RX_IMMEDIATE);
     Serial.println("All initialization complete (receiver)");
 }
 
@@ -190,7 +261,7 @@ void loop() {
 }
 
 void checkData() {
-    //Serial.println("Checking data");
+    Serial.println("Checking data");
     delayMicroseconds(20);
 
     uwb_irq = false;
@@ -230,7 +301,13 @@ void checkData() {
     
     int steps, left_steps, right_steps;
 
-    //Serial.printf("Received header 0x%X\n", rx_data[4]);
+    float left_sensor_distance, right_sensor_distance;
+    bool left_clear, right_clear;
+
+    int valid_dirs[4];
+    int count, choice;
+
+    Serial.printf("Received header 0x%X\n", rx_data[4]);
 
     switch (rx_data[4]) {
         case 0xAB: // manual mode header
@@ -258,8 +335,52 @@ void checkData() {
             }
 
             moveSteppers(left_steps, right_steps);
-
             dwt_rxenable(DWT_START_RX_IMMEDIATE);
+
+            break;
+        case 0xAC: // random mode header
+            // in this mode we just move the robot around randomly, accounting for obstacles using the tof sensors
+            steps = random(MIN_RANDOM_MODE_STEPS, MAX_RANDOM_MODE_STEPS + 1);
+
+            left_sensor_distance = tofSensorDistance(TOF3_ADDR);
+            right_sensor_distance = tofSensorDistance(TOF2_ADDR);
+
+            left_clear = left_sensor_distance == OUT_OF_RANGE || left_sensor_distance > TOO_CLOSE;
+            right_clear = right_sensor_distance == OUT_OF_RANGE || right_sensor_distance > TOO_CLOSE;
+            // also do same for forward when it's set up
+
+            count = 0;
+
+            valid_dirs[count++] = 0; // always valid till front sensor is added
+            valid_dirs[count++] = 1; // always valid
+            if (left_clear) valid_dirs[count++] = 2;
+            if (right_clear) valid_dirs[count++] = 3;
+
+            choice = valid_dirs[random(0, count)];
+
+            switch (choice) {
+                case 0:
+                    left_steps = steps;
+                    right_steps = steps;
+                    break;
+                case 1:
+                    left_steps = -steps;
+                    right_steps = -steps;
+                    break;
+                case 2:
+                    left_steps = -steps;
+                    right_steps = steps;
+                    break;
+                case 3:
+                    left_steps = steps;
+                    right_steps = -steps;
+                    break;
+                default: break;
+            }
+
+            moveSteppers(left_steps, right_steps);
+            dwt_rxenable(DWT_START_RX_IMMEDIATE);
+            
             break;
         case 0xFF:
             STATE = STATES::FINISH;
@@ -384,8 +505,47 @@ void moveSteppers(int left_steps, int right_steps) {
     rightStepper.moveStepper(right_dir, abs(right_steps));  
 
     while (leftStepper.isBusy() || rightStepper.isBusy()) {
-    leftStepper.stepperLoop();
-    rightStepper.stepperLoop();
+        leftStepper.stepperLoop();
+        rightStepper.stepperLoop();
+    }
+}
+
+float tofSensorDistance(uint8_t address) {
+    VL53L0X_RangingMeasurementData_t measure;
+    uint16_t offset = 0;
+    bool applyAngleCorrection = false;
+
+    switch (address) {
+        case TOF1_ADDR:
+            tof1.rangingTest(&measure, false);
+            offset = TOF1_OFFSET;
+            break;
+        case TOF2_ADDR:
+            tof2.rangingTest(&measure, false);
+            offset = TOF2_OFFSET;
+            applyAngleCorrection = true;
+            break;
+        case TOF3_ADDR:
+            tof3.rangingTest(&measure, false);
+            offset = TOF3_OFFSET;
+            applyAngleCorrection = true;
+            break;
+        default: break;
+    }
+
+    // if it's out of range sometimes it gives the status, other times it measures 8191 but this is consistant behaviour
+    if (measure.RangeStatus != 4 && measure.RangeMilliMeter != 8191) { // 4 means distance is out of range
+        int16_t final_calculated_dist = (int16_t) (measure.RangeMilliMeter - offset);
+
+        if (applyAngleCorrection) {
+            final_calculated_dist *= 0.9548f; // cos(17.3 deg)
+        }
+
+        Serial.printf("Distance: %d mm\n", final_calculated_dist);
+        return final_calculated_dist;
+    } else {
+        Serial.print("Out of range\n");
+        return OUT_OF_RANGE;
     }
 }
 
@@ -405,4 +565,42 @@ void resetDWM() {
     delay(10);
     digitalWrite(PIN_RST, HIGH);
     delay(20);
+}
+
+
+enum TofState { IDLE, MEASURING };
+TofState tof_state = IDLE;
+unsigned long tof_timer = 0;
+float left_sensor_distance, right_sensor_distance;
+
+void serviceSensorsNonBlocking() {
+    switch (tof_state) {
+        case IDLE:
+            // 1. Kick off measurement without waiting in a while-loop
+            tof2.startRangeContinuous();
+            tof3.startRangeContinuous();
+            
+            tof_timer = millis();
+            tof_state = MEASURING;
+            break;
+
+        case MEASURING:
+            // 2. Allow RP2040 CPU to process UWB interrupts for 35ms
+            if (millis() - tof_timer >= 35) {
+                // 3. Read results non-blockingly
+                if (tof3.isRangeComplete()) {
+                    left_sensor_distance = tofSensorDistance(TOF3_ADDR);
+                }
+                if (tof2.isRangeComplete()) {
+                    right_sensor_distance = tofSensorDistance(TOF2_ADDR);
+                }
+
+                // 4. Put sensors back into idle state
+                tof2.stopRangeContinuous();
+                tof3.stopRangeContinuous();
+                
+                tof_state = IDLE;
+            }
+            break;
+    }
 }
