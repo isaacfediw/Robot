@@ -20,13 +20,13 @@ extern "C" {
 #define JOY_SW   27 // give this an internal pull-up resistor
 #define SW_DELAY 500
 
-#define UPPER_ADC_VALUE 260  // adjusted for resting_pos of 540
-#define LOWER_ADC_VALUE -240 // adjusted for resting_pos of 540
+#define UPPER_ADC_VALUE 483  // adjusted for resting_pos of 540
+#define LOWER_ADC_VALUE -507 // adjusted for resting_pos of 540
 #define JOY_DEADZONE    50
 #define RESTING_POS     540 
 
 #define MAX_STEPS       100
-#define MIN_STEPS       10
+#define MIN_STEPS       -100
 
 // dwm3000 definitions
 #define PIN_IRQ 6
@@ -366,26 +366,39 @@ void manualControl() {
 
     bool turning = abs(xVal) > abs(yVal);
 
-    uint8_t data[3]; // first byte -> manual header, second byte -> direction, third byte -> steps
+    // first byte -> manual header
+    // second byte -> left steps
+    // third byte -> left steps sign (0x00 for negative, 0x01 for positive)
+    // fourth byte -> right steps
+    // fifth byte -> right steps sign
+    uint8_t data[5]; 
+
     data[0] = 0xAB;
 
-    int steps = 0;
+    int right_steps = 0;
+    int left_steps = 0;
+    
+    int ySteps = map(yVal, LOWER_ADC_VALUE, UPPER_ADC_VALUE, MIN_STEPS, MAX_STEPS);
+    int xSteps = map(xVal, LOWER_ADC_VALUE, UPPER_ADC_VALUE, MIN_STEPS, MAX_STEPS);
 
-    if (turning) {
-        if (xVal > 0) data[1] = 0x10; // left
-        else data[1] = 0x11; // right
-
-        steps = map(abs(xVal), LOWER_ADC_VALUE, UPPER_ADC_VALUE, MIN_STEPS/2, MAX_STEPS/2);
+    if (abs(ySteps) > abs(xSteps)) {
+        left_steps = ySteps;
+        right_steps = ySteps;
     } else {
-        if (yVal > 0) data[1] = 0x00; // forward
-        else data[1] = 0x01; // backward
-
-        steps = map(abs(yVal), LOWER_ADC_VALUE, UPPER_ADC_VALUE, MIN_STEPS, MAX_STEPS);
+        left_steps = ySteps - xSteps;
+        right_steps = ySteps + xSteps;
     }
 
-    memcpy(&data[2], &steps, 1);
+    data[2] = (left_steps < 0) ? 0x00 : 0x01;
+    data[4] = (right_steps < 0) ? 0x00 : 0x01;
 
-    send(RECEIVER_ADDRESS, data, 3, false);
+    left_steps = abs(left_steps);
+    right_steps = abs(right_steps);
+
+    memcpy(&data[1], &left_steps, 1);
+    memcpy(&data[3], &right_steps, 1);
+
+    send(RECEIVER_ADDRESS, data, 5, false);
 }
 
 void resetDWM() {

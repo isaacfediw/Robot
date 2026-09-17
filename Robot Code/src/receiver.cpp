@@ -305,7 +305,7 @@ void checkData() {
     uint8_t data[1];
     double distance;
     
-    int steps, left_steps, right_steps;
+    int left_steps, right_steps;
 
     float left_sensor_distance, right_sensor_distance;
     bool left_clear, right_clear;
@@ -317,27 +317,11 @@ void checkData() {
     switch (rx_data[4]) {
         case 0xAB: // manual mode header
 
-            memcpy(&steps, &rx_data[6], 1);
+            memcpy(&left_steps, &rx_data[5], 1);
+            memcpy(&right_steps, &rx_data[7], 1);
 
-            switch (rx_data[5]) { // direction
-                case 0x10: // left
-                    left_steps = -steps;
-                    right_steps = steps;
-                    break;
-                case 0x11: // right
-                    left_steps = steps;
-                    right_steps = -steps;
-                    break;
-                case 0x00: // forward
-                    left_steps = steps;
-                    right_steps = steps;
-                    break;
-                case 0x01: // backward
-                    left_steps = -steps;
-                    right_steps = -steps;                    
-                    break;
-                default: break;
-            }
+            if (rx_data[6]  == 0x00) left_steps = -left_steps;
+            if (rx_data[8] == 0x00) right_steps = -right_steps;
 
             moveSteppers(left_steps, right_steps);
             dwt_rxenable(DWT_START_RX_IMMEDIATE);
